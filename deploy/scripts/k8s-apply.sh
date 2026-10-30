@@ -15,6 +15,24 @@ if ! command -v kubectl >/dev/null; then
 fi
 aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION" >/dev/null
 
+diagnose() {  # runs on any failure so the CodeBuild log says *why*
+  set +e
+  echo "================ DIAGNOSTICS (failed at line $1) ================"
+  kubectl get nodes -o wide; kubectl get nodeclaims,nodepools 2>/dev/null
+  kubectl get pods -A -o wide
+  kubectl -n neonbyte get deploy,rs,ingress,svc
+  kubectl get events -A --sort-by=.lastTimestamp | tail -60
+  for ing in storefront backends; do kubectl -n neonbyte describe ingress "$ing" | tail -25; done
+  for pod in $(kubectl -n neonbyte get pods --no-headers | awk '$3!="Running" || $2 !~ /^([0-9]+)\/\1$/ {print $1}' | head -6); do
+    echo "---- pod $pod"; kubectl -n neonbyte describe pod "$pod" | tail -40
+    kubectl -n neonbyte logs "$pod" --all-containers --tail=60 2>&1 | tail -60
+    kubectl -n neonbyte logs "$pod" --all-containers --previous --tail=40 2>/dev/null | tail -40
+  done
+  kubectl -n amazon-cloudwatch get pods -o wide; kubectl -n amazon-cloudwatch get deploy
+  echo "================================================================="
+}
+trap 'diagnose $LINENO' ERR
+
 # The CloudWatch operator only instruments pods created after its webhook is up.
 kubectl -n amazon-cloudwatch wait --for=condition=Available deployment --all --timeout=15m
 

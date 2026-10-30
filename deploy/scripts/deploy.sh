@@ -3,6 +3,7 @@
 #
 #   deploy/scripts/deploy.sh                       # package this checkout, build images, deploy
 #   deploy/scripts/deploy.sh --no-rebuild          # update infra only, keep the current images
+#   deploy/scripts/deploy.sh --disable-rollback    # on failure keep the resources for debugging
 #   deploy/scripts/deploy.sh --param LoadGenUsers=10 --param EnableTransactionSearch=false
 #
 # Env: AWS_REGION / AWS_PROFILE as usual, STACK_NAME (default neonbyte).
@@ -16,9 +17,11 @@ REGION="${AWS_REGION:-$(aws configure get region || true)}"
 REGION="${REGION:?set AWS_REGION}"
 REBUILD=true
 PARAMS=()
+EXTRA=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-rebuild) REBUILD=false ;;
+    --disable-rollback) EXTRA+=(--disable-rollback) ;;  # keep failed resources for debugging
     --param) PARAMS+=("$2"); shift ;;
     -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "unknown argument $1" >&2; exit 1 ;;
@@ -69,7 +72,7 @@ aws cloudformation deploy \
   --template-file "$ROOT/deploy/cloudformation/neonbyte.yaml" \
   --s3-bucket "$BUCKET" --s3-prefix templates \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
-  --no-fail-on-empty-changeset \
+  --no-fail-on-empty-changeset ${EXTRA[@]+"${EXTRA[@]}"} \
   --parameter-overrides "SourceS3Uri=s3://$BUCKET/$SRC_KEY" "ImageTag=$TAG" ${PARAMS[@]+"${PARAMS[@]}"}
 
 aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" \
