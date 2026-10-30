@@ -8,7 +8,7 @@ missing product (404s for the error charts), and — with ``--chat-probability``
 ask the Sparky assistant a question, which exercises the whole multi-agent chain.
 
 Runs anywhere: on a laptop against ``http://127.0.0.1:8080``, or as the
-``loadgen`` ECS service against the CloudFront URL. Configure with flags or the
+``loadgen`` EKS deployment against the CloudFront URL. Configure with flags or the
 matching env vars (``TARGET_URL``, ``USERS``, ``DURATION``, ...).
 
     python traffic/loadgen.py --target http://127.0.0.1:8080 --users 5 --duration 300
@@ -188,6 +188,19 @@ async def main(args: argparse.Namespace) -> None:
     print(stats.report())
 
 
+def resolve_target_from_ssm(name: str) -> str:
+    """Wait for the storefront URL to be published in SSM (the stack writes it after CloudFront exists)."""
+    import boto3
+
+    ssm = boto3.client("ssm", region_name=os.getenv("AWS_REGION"))
+    while True:
+        try:
+            return ssm.get_parameter(Name=name)["Parameter"]["Value"]
+        except Exception as exc:  # noqa: BLE001 - parameter not there yet / transient
+            print(f"waiting for SSM parameter {name}: {type(exc).__name__}", flush=True)
+            time.sleep(30)
+
+
 def parse() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--target", default=env("TARGET_URL", "http://127.0.0.1:8080"), help="storefront base URL")
@@ -200,7 +213,10 @@ def parse() -> argparse.Namespace:
                    help="chance per journey of an assistant chat (each one invokes several LLM calls)")
     p.add_argument("--report-every", type=int, default=int(env("REPORT_EVERY", "60")))
     p.add_argument("--verbose", action="store_true", default=env("VERBOSE", "") == "true")
-    return p.parse_args()
+    args = p.parse_args()
+    if not os.getenv("TARGET_URL") and os.getenv("TARGET_URL_PARAM") and args.target == "http://127.0.0.1:8080":
+        args.target = resolve_target_from_ssm(os.environ["TARGET_URL_PARAM"])
+    return args
 
 
 if __name__ == "__main__":

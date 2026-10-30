@@ -1,1 +1,3 @@
 httpx==0.28.1
+# only needed when the target URL comes from SSM (TARGET_URL_PARAM, the EKS deployment)
+boto3==1.40.10

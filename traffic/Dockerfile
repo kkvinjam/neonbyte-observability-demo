@@ -1,4 +1,4 @@
-# Traffic generator image (runs as the `loadgen` ECS service, or locally via compose --profile load).
+# Traffic generator image (runs as the `loadgen` EKS deployment, or locally via compose --profile load).
 FROM public.ecr.aws/docker/library/python:3.13-slim
 WORKDIR /app
 COPY requirements.txt .

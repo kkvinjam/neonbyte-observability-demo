@@ -19,6 +19,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD PYTHONPATH= OTEL_SDK_DISABLED=true python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"PORT\"]}/health', timeout=3)" || exit 1
 
-# 0.0.0.0 inside the container only: on ECS the task ENI sits in a private subnet
-# behind security groups; docker compose publishes the storefront to 127.0.0.1 only.
+# 0.0.0.0 inside the container only: on EKS the pod sits in a private subnet
+# behind security groups (ALB-only ingress); docker compose publishes the storefront to 127.0.0.1 only.
 CMD ["sh", "-c", "exec uvicorn ${SERVICE}.app:app --host 0.0.0.0 --port ${PORT}"]

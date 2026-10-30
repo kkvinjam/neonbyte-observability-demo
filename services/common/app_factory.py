@@ -1,9 +1,9 @@
 """FastAPI app factory shared by every NeonByte microservice.
 
-Telemetry is *not* configured here: on ECS the ADOT Python auto-instrumentation
-(mounted by an init container and activated through ``PYTHONPATH``) instruments
-FastAPI, httpx and botocore with zero code, exactly like the reference
-``petlistadoptions-py`` service. This module only adds JSON logs that carry the
+Telemetry is *not* configured here: on EKS the CloudWatch Observability add-on's
+operator injects the ADOT Python auto-instrumentation (an init container plus
+``PYTHONPATH``, triggered by a pod annotation), which instruments FastAPI, httpx and
+botocore with zero code — the same zero-code approach as the reference demo. This module only adds JSON logs that carry the
 active trace id so CloudWatch Logs and X-Ray traces can be correlated.
 """
 

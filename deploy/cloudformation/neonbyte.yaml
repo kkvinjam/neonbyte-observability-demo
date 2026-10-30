@@ -1,10 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::LanguageExtensions
 Description: >-
-  NeonByte Electronics - an observability demo store: 5 Python microservices on ECS Fargate
-  (ADOT + CloudWatch agent / Application Signals), 5 multi-framework AI agents on Amazon Bedrock
+  NeonByte Electronics - an observability demo store: 5 Python microservices on Amazon EKS Auto Mode
+  (CloudWatch Observability add-on: Application Signals auto-instrumentation, Container Insights), 5 multi-framework AI agents on Amazon Bedrock
   AgentCore Runtime behind an AgentCore Gateway, CloudFront storefront, CloudWatch dashboard and
-  a continuous traffic generator. Images are built from source by CodeBuild during stack creation.
+  a continuous traffic generator. CodeBuild builds the images from source and applies the Kubernetes manifests.
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -12,7 +12,7 @@ Metadata:
       - Label: { default: Source code }
         Parameters: [SourceS3Uri, SourceRepoUrl, SourceBranch, ImageTag]
       - Label: { default: Networking }
-        Parameters: [AvailabilityZoneId1, AvailabilityZoneId2, VpcCidr]
+        Parameters: [AvailabilityZoneId1, AvailabilityZoneId2, VpcCidr, KubernetesVersion]
       - Label: { default: Models (Amazon Bedrock) }
         Parameters: [ClaudeModelId, NovaLiteModelId, LlamaModelId, GptOssModelId, EnableGuardrail]
       - Label: { default: Observability }
@@ -49,6 +49,11 @@ Parameters:
     Type: String
     Default: 10.42.0.0/16
     AllowedPattern: "^(\\d{1,3}\\.){3}\\d{1,3}/16$"
+  KubernetesVersion:
+    Type: String
+    Default: "1.36"
+    AllowedPattern: "^1\\.\\d{2}$"
+    Description: EKS version (standard support).
   ClaudeModelId:
     Type: String
     Default: us.anthropic.claude-sonnet-4-6
@@ -85,6 +90,7 @@ Parameters:
     AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90]
   ServiceDesiredCount:
     Type: Number
+    Description: Pod replicas per microservice.
     Default: 1
     MinValue: 1
     MaxValue: 4
@@ -93,7 +99,7 @@ Parameters:
     Default: 1
     MinValue: 0
     MaxValue: 4
-    Description: Traffic generator tasks (0 = off). Each runs LoadGenUsers simulated shoppers.
+    Description: Traffic generator pods (0 = off). Each runs LoadGenUsers simulated shoppers.
   LoadGenUsers:
     Type: Number
     Default: 5
@@ -162,28 +168,28 @@ Resources:
       VpcId: !Ref Vpc
       AvailabilityZoneId: !If [HasAz1, !Ref AvailabilityZoneId1, !FindInMap [RegionAzs, !Ref "AWS::Region", Az1]]
       CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 4, 12]]
-      Tags: [{ Key: Name, Value: neonbyte-public-1 }]
+      Tags: [{ Key: Name, Value: neonbyte-public-1 }, { Key: kubernetes.io/role/elb, Value: "1" }]
   PublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref Vpc
       AvailabilityZoneId: !If [HasAz2, !Ref AvailabilityZoneId2, !FindInMap [RegionAzs, !Ref "AWS::Region", Az2]]
       CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 4, 12]]
-      Tags: [{ Key: Name, Value: neonbyte-public-2 }]
+      Tags: [{ Key: Name, Value: neonbyte-public-2 }, { Key: kubernetes.io/role/elb, Value: "1" }]
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref Vpc
       AvailabilityZoneId: !If [HasAz1, !Ref AvailabilityZoneId1, !FindInMap [RegionAzs, !Ref "AWS::Region", Az1]]
       CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 4, 12]]
-      Tags: [{ Key: Name, Value: neonbyte-private-1 }]
+      Tags: [{ Key: Name, Value: neonbyte-private-1 }, { Key: kubernetes.io/role/internal-elb, Value: "1" }]
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref Vpc
       AvailabilityZoneId: !If [HasAz2, !Ref AvailabilityZoneId2, !FindInMap [RegionAzs, !Ref "AWS::Region", Az2]]
       CidrBlock: !Select [3, !Cidr [!Ref VpcCidr, 4, 12]]
-      Tags: [{ Key: Name, Value: neonbyte-private-2 }]
+      Tags: [{ Key: Name, Value: neonbyte-private-2 }, { Key: kubernetes.io/role/internal-elb, Value: "1" }]
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -256,12 +262,15 @@ Resources:
       LogGroupName: !Ref FlowLogGroup
       DeliverLogsPermissionArn: !GetAtt FlowLogRole.Arn
 
-  # Security groups: the public ALB accepts only CloudFront origin-facing traffic; every
-  # service and agent ENI shares AppSecurityGroup and talks to its peers on 8080 only.
+  # Security groups (stack-owned, referenced by the Ingress annotations):
+  # * AlbSecurityGroup        public ALB — HTTP from CloudFront origin-facing IPs only
+  # * InternalAlbSecurityGroup internal ALB — HTTP from the AgentCore agents only
+  # * AppSecurityGroup        AgentCore runtime ENIs (egress only)
+  # * EKS cluster SG          pods; accepts 8080 from the two ALBs
   AlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: NeonByte ALB - HTTP from CloudFront origin-facing IPs only
+      GroupDescription: NeonByte public ALB - HTTP from CloudFront origin-facing IPs only
       VpcId: !Ref Vpc
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -272,26 +281,37 @@ Resources:
   AppSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: NeonByte services and agents
+      GroupDescription: NeonByte AgentCore agents
       VpcId: !Ref Vpc
-  AppIngressFromAlb:
+  InternalAlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: NeonByte internal ALB - HTTP from the AgentCore agents
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+          Description: AgentCore agents to backend APIs
+  ClusterIngressFromPublicAlb:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
-      GroupId: !Ref AppSecurityGroup
+      GroupId: !GetAtt EksCluster.ClusterSecurityGroupId
       IpProtocol: tcp
       FromPort: 8080
       ToPort: 8080
       SourceSecurityGroupId: !Ref AlbSecurityGroup
-      Description: ALB to storefront
-  AppIngressFromApp:
+      Description: public ALB to storefront pods
+  ClusterIngressFromInternalAlb:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
-      GroupId: !Ref AppSecurityGroup
+      GroupId: !GetAtt EksCluster.ClusterSecurityGroupId
       IpProtocol: tcp
       FromPort: 8080
       ToPort: 8080
-      SourceSecurityGroupId: !Ref AppSecurityGroup
-      Description: service-to-service and agent-to-service
+      SourceSecurityGroupId: !Ref InternalAlbSecurityGroup
+      Description: internal ALB to backend pods
 
   # =====================================================================================
   # Helper Lambda: CloudFront prefix-list lookup + kicking off the CodeBuild image build
@@ -336,29 +356,33 @@ Resources:
               req = urllib.request.Request(e["ResponseURL"], data=body, method="PUT", headers={"Content-Type": ""})
               urllib.request.urlopen(req, timeout=30)
 
+          def start_build(e, p, mode):
+              env = {"CFN_RESPONSE_URL": e["ResponseURL"], "CFN_STACK_ID": e["StackId"],
+                     "CFN_REQUEST_ID": e["RequestId"], "CFN_LOGICAL_ID": e["LogicalResourceId"],
+                     "CFN_PHYSICAL_ID": e.get("PhysicalResourceId") or e["LogicalResourceId"],
+                     "IMAGE_TAG": p["ImageTag"], "MODE": mode, **p.get("Overrides", {})}
+              build = boto3.client("codebuild").start_build(
+                  projectName=p["Project"],
+                  environmentVariablesOverride=[{"name": k, "value": str(v), "type": "PLAINTEXT"} for k, v in env.items()])
+              print("started", mode, build["build"]["id"])  # CodeBuild answers CloudFormation when done
+
           def handler(e, ctx):
-              p = e["ResourceProperties"]
+              p, rt = e["ResourceProperties"], e["RequestType"]
               try:
-                  if e["RequestType"] == "Delete":
+                  if p["Kind"] == "K8sApply":
+                      return start_build(e, p, "k8s-delete" if rt == "Delete" else "k8s-apply")
+                  if rt == "Delete":
                       return send(e, ctx, "SUCCESS")
                   if p["Kind"] == "PrefixList":
                       pl = boto3.client("ec2").describe_managed_prefix_lists(
                           Filters=[{"Name": "prefix-list-name", "Values": [p["Name"]]}])["PrefixLists"][0]
                       return send(e, ctx, "SUCCESS", {"Id": pl["PrefixListId"]}, pl["PrefixListId"])
                   if p["Kind"] == "ImageBuild":
-                      env = {"CFN_RESPONSE_URL": e["ResponseURL"], "CFN_STACK_ID": e["StackId"],
-                             "CFN_REQUEST_ID": e["RequestId"], "CFN_LOGICAL_ID": e["LogicalResourceId"],
-                             "CFN_PHYSICAL_ID": e.get("PhysicalResourceId") or "neonbyte-images",
-                             "IMAGE_TAG": p["ImageTag"]}
-                      build = boto3.client("codebuild").start_build(
-                          projectName=p["Project"],
-                          environmentVariablesOverride=[{"name": k, "value": v, "type": "PLAINTEXT"} for k, v in env.items()])
-                      print("started", build["build"]["id"])
-                      return  # CodeBuild answers CloudFormation when the build finishes
+                      return start_build(e, p, "images")
                   send(e, ctx, "FAILED", reason="unknown Kind")
               except Exception as exc:
                   print(exc)
-                  send(e, ctx, "FAILED", reason=str(exc)[:400])
+                  send(e, ctx, "SUCCESS" if rt == "Delete" else "FAILED", reason=str(exc)[:400])
   CloudFrontPrefixList:
     Type: Custom::PrefixList
     Properties:
@@ -415,6 +439,12 @@ Resources:
                   - ecr:PutImage
                   - ecr:UploadLayerPart
                 Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/neonbyte/*
+              - Effect: Allow
+                Action: eks:DescribeCluster
+                Resource: !Sub arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/neonbyte-eks
+              - Effect: Allow
+                Action: elasticloadbalancing:DescribeLoadBalancers
+                Resource: "*"
               - !If
                 - UseS3Source
                 - Effect: Allow
@@ -427,7 +457,7 @@ Resources:
     Type: AWS::CodeBuild::Project
     Properties:
       Name: neonbyte-image-build
-      Description: Builds all NeonByte container images (linux/arm64) and pushes them to ECR
+      Description: Builds the NeonByte images (linux/arm64) and applies the Kubernetes manifests to EKS
       ServiceRole: !GetAtt ImageBuildRole.Arn
       TimeoutInMinutes: 50
       Artifacts: { Type: NO_ARTIFACTS }
@@ -443,6 +473,7 @@ Resources:
           - { Name: SOURCE_REPO_URL, Value: !Ref SourceRepoUrl }
           - { Name: SOURCE_BRANCH, Value: !Ref SourceBranch }
           - { Name: IMAGE_TAG, Value: !Ref ImageTag }
+          - { Name: MODE, Value: images }
       Source:
         Type: NO_SOURCE
         BuildSpec: |
@@ -452,19 +483,38 @@ Resources:
               commands:
                 - |
                   set -e
+                  if [ "$MODE" = "k8s-delete" ]; then
+                    # Remove the Ingresses so the controller deletes its ALBs before the VPC goes away.
+                    # Best effort: the cluster may never have been created.
+                    set +e
+                    aws eks update-kubeconfig --name "$CLUSTER_NAME" >/dev/null 2>&1 && {
+                      minor=$(aws eks describe-cluster --name "$CLUSTER_NAME" --query cluster.version --output text)
+                      curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable-$minor.txt)/bin/linux/arm64/kubectl" && chmod +x /usr/local/bin/kubectl
+                      kubectl -n neonbyte delete ingress --all --wait --timeout=10m
+                      kubectl -n neonbyte delete deploy --all --wait --timeout=5m
+                      kubectl delete nodepool neonbyte-arm64 --wait --timeout=5m
+                    }
+                    exit 0
+                  fi
                   if [ -n "$SOURCE_S3_URI" ]; then
                     aws s3 cp "$SOURCE_S3_URI" /tmp/src.zip && mkdir -p src && unzip -q /tmp/src.zip -d src
                   else
                     git clone --depth 1 --branch "$SOURCE_BRANCH" "$SOURCE_REPO_URL" src
                   fi
-                  cd src && bash deploy/scripts/build-images.sh "$REGISTRY" "$IMAGE_TAG"
+                  cd src
+                  if [ "$MODE" = "k8s-apply" ]; then
+                    bash deploy/scripts/k8s-apply.sh
+                  else
+                    bash deploy/scripts/build-images.sh "$REGISTRY" "$IMAGE_TAG"
+                    echo "{\"ImageTag\": \"$IMAGE_TAG\"}" > /tmp/cfn-data.json
+                  fi
             post_build:
               commands:
                 - |
                   if [ -n "$CFN_RESPONSE_URL" ]; then
                     export STATUS=SUCCESS
-                    [ "$CODEBUILD_BUILD_SUCCEEDING" = "1" ] || export STATUS=FAILED
-                    python3 -c 'import json,os; e=os.environ; print(json.dumps({"Status":e["STATUS"],"Reason":"CodeBuild "+e["CODEBUILD_BUILD_ID"],"PhysicalResourceId":e["CFN_PHYSICAL_ID"],"StackId":e["CFN_STACK_ID"],"RequestId":e["CFN_REQUEST_ID"],"LogicalResourceId":e["CFN_LOGICAL_ID"],"Data":{"ImageTag":e["IMAGE_TAG"]}}))' > /tmp/cfn.json
+                    [ "$CODEBUILD_BUILD_SUCCEEDING" = "1" ] || [ "$MODE" = "k8s-delete" ] || export STATUS=FAILED
+                    python3 -c 'import json,os; e=os.environ; d=json.load(open("/tmp/cfn-data.json")) if os.path.exists("/tmp/cfn-data.json") else {}; print(json.dumps({"Status":e["STATUS"],"Reason":"CodeBuild "+e["CODEBUILD_BUILD_ID"],"PhysicalResourceId":e["CFN_PHYSICAL_ID"],"StackId":e["CFN_STACK_ID"],"RequestId":e["CFN_REQUEST_ID"],"LogicalResourceId":e["CFN_LOGICAL_ID"],"Data":d}))' > /tmp/cfn.json
                     curl -sS -X PUT -H 'Content-Type:' --data-binary @/tmp/cfn.json "$CFN_RESPONSE_URL"
                   fi
   # Create/Update starts a build; the stack waits (up to an hour) for CodeBuild to report back.
@@ -526,7 +576,7 @@ Resources:
         Properties:
           Name: !Sub /neonbyte/${Svc}url
           Type: String
-          Value: !Sub http://${Svc}.neonbyte.local:8080
+          Value: !Sub http://${K8sApp.InternalAlbDns}  # internal ALB routes /products, /carts, /orders, /payments
   Fn::ForEach::ChaosParams:
     - Svc
     - [storefront, catalog, cart, orders, payments]
@@ -581,37 +631,108 @@ Resources:
     Properties:
       LogGroupName: /neonbyte/local/agents
       RetentionInDays: !Ref LogRetentionDays
-
   # =====================================================================================
-  # ECS: cluster (Container Insights enhanced), Cloud Map, roles, task definitions
+  # EKS Auto Mode cluster + CloudWatch Observability add-on (Application Signals,
+  # Container Insights, Fluent Bit logs) — the reference's EKS observability setup
   # =====================================================================================
-  Cluster:
-    Type: AWS::ECS::Cluster
-    Properties:
-      ClusterName: neonbyte-cluster
-      ClusterSettings: [{ Name: containerInsights, Value: enhanced }]
-  Namespace:
-    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
-    Properties: { Name: neonbyte.local, Vpc: !Ref Vpc }
-
-  TaskExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement: [{ Effect: Allow, Principal: { Service: ecs-tasks.amazonaws.com }, Action: sts:AssumeRole }]
-      ManagedPolicyArns: [!Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"]
-  # One task role for the demo services: DynamoDB tables, /neonbyte/* parameters, the
-  # CloudWatch agent sidecar, ECS Exec, and (storefront) invoking the orchestrator agent.
-  TaskRole:
+  EksClusterRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
-            Principal: { Service: ecs-tasks.amazonaws.com }
-            Action: sts:AssumeRole
+            Principal: { Service: eks.amazonaws.com }
+            Action: [sts:AssumeRole, sts:TagSession]
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEKSClusterPolicy
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEKSComputePolicy
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEKSBlockStoragePolicy
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEKSLoadBalancingPolicy
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEKSNetworkingPolicy
+  EksNodeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: [{ Effect: Allow, Principal: { Service: ec2.amazonaws.com }, Action: sts:AssumeRole }]
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEKSWorkerNodeMinimalPolicy
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly
+  EksCluster:
+    Type: AWS::EKS::Cluster
+    DependsOn: [PrivateDefaultRoute, PrivateSubnet1Routes, PrivateSubnet2Routes]
+    Properties:
+      Name: neonbyte-eks
+      Version: !Ref KubernetesVersion
+      RoleArn: !GetAtt EksClusterRole.Arn
+      BootstrapSelfManagedAddons: false
+      AccessConfig:
+        AuthenticationMode: API
+        BootstrapClusterCreatorAdminPermissions: true  # whoever creates the stack can kubectl
+      ComputeConfig:
+        Enabled: true
+        NodePools: [system, general-purpose]
+        NodeRoleArn: !GetAtt EksNodeRole.Arn
+      KubernetesNetworkConfig:
+        ElasticLoadBalancing: { Enabled: true }
+      StorageConfig:
+        BlockStorage: { Enabled: true }
+      ResourcesVpcConfig:
+        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
+        EndpointPublicAccess: true   # IAM-authenticated API, so CodeBuild and your laptop can run kubectl
+        EndpointPrivateAccess: true
+      Logging:
+        ClusterLogging:
+          EnabledTypes: [{ Type: api }, { Type: audit }, { Type: authenticator }]
+
+  # Container logs land here via the add-on's Fluent Bit; pre-created for retention + metric filters.
+  ContainerInsightsAppLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/containerinsights/neonbyte-eks/application
+      RetentionInDays: !Ref LogRetentionDays
+  CloudWatchAddonRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: pods.eks.amazonaws.com }
+            Action: [sts:AssumeRole, sts:TagSession]
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/CloudWatchAgentServerPolicy
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSXrayWriteOnlyAccess
+  CloudWatchAddon:
+    Type: AWS::EKS::Addon
+    DependsOn: ContainerInsightsAppLogGroup
+    Properties:
+      ClusterName: !Ref EksCluster
+      AddonName: amazon-cloudwatch-observability
+      ResolveConflicts: OVERWRITE
+      PreserveOnDelete: false
+      PodIdentityAssociations:
+        - { ServiceAccount: cloudwatch-agent, RoleArn: !GetAtt CloudWatchAddonRole.Arn }
+      ConfigurationValues: |
+        {"agent":{"config":{
+          "logs":{"metrics_collected":{
+            "application_signals":{"hosted_in":"neonbyte-eks"},
+            "kubernetes":{"cluster_name":"neonbyte-eks","enhanced_container_insights":true}}},
+          "traces":{"traces_collected":{"application_signals":{}}}}}}
+
+  # One IAM role for the app pods (service account neonbyte/neonbyte-app): DynamoDB tables,
+  # /neonbyte/* parameters (chaos knobs, decline rate, storefront URL for loadgen), and
+  # (storefront) invoking the orchestrator agent.
+  PodRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: pods.eks.amazonaws.com }
+            Action: [sts:AssumeRole, sts:TagSession]
             Condition: { StringEquals: { aws:SourceAccount: !Ref "AWS::AccountId" } }
       Policies:
         - PolicyName: neonbyte-app
@@ -627,202 +748,51 @@ Resources:
               - Effect: Allow
                 Action: bedrock-agentcore:InvokeAgentRuntime
                 Resource: !Sub arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/NeonByteOrchestrator*
-              - Effect: Allow  # CloudWatch agent sidecar (Application Signals)
-                Action:
-                  - cloudwatch:PutMetricData
-                  - logs:PutLogEvents
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:DescribeLogStreams
-                  - logs:DescribeLogGroups
-                  - xray:PutTraceSegments
-                  - xray:PutTelemetryRecords
-                  - xray:GetSamplingRules
-                  - xray:GetSamplingTargets
-                  - xray:GetSamplingStatisticSummaries
-                Resource: "*"
-              - Effect: Allow  # ECS Exec
-                Action: [ssmmessages:CreateControlChannel, ssmmessages:CreateDataChannel, ssmmessages:OpenControlChannel, ssmmessages:OpenDataChannel]
-                Resource: "*"
+  PodIdentity:
+    Type: AWS::EKS::PodIdentityAssociation
+    Properties:
+      ClusterName: !Ref EksCluster
+      Namespace: neonbyte
+      ServiceAccount: neonbyte-app
+      RoleArn: !GetAtt PodRole.Arn
 
-  CloudWatchAgentLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties: { LogGroupName: /neonbyte/ecs/cloudwatch-agent, RetentionInDays: !Ref LogRetentionDays }
+  # CodeBuild applies the Kubernetes manifests, so its role gets cluster-admin via an access entry.
+  BuildAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    Properties:
+      ClusterName: !Ref EksCluster
+      PrincipalArn: !GetAtt ImageBuildRole.Arn
+      AccessPolicies:
+        - PolicyArn: !Sub arn:${AWS::Partition}:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+          AccessScope: { Type: cluster }
 
-  # Every app task = app container + ADOT Python init container + CloudWatch agent sidecar,
-  # the same zero-code Application Signals setup as the reference petlistadoptions-py service.
-  Fn::ForEach::Apps:
-    - App
-    - [storefront, catalog, cart, orders, payments]
-    - "${App}LogGroup":
-        Type: AWS::Logs::LogGroup
-        Properties:
-          LogGroupName: !Sub /neonbyte/ecs/${App}
-          RetentionInDays: !Ref LogRetentionDays
-      "${App}Discovery":
-        Type: AWS::ServiceDiscovery::Service
-        Properties:
-          Name: !Ref App
-          NamespaceId: !Ref Namespace
-          DnsConfig:
-            RoutingPolicy: MULTIVALUE
-            DnsRecords: [{ Type: A, TTL: 10 }]
-          HealthCheckCustomConfig: { FailureThreshold: 1 }
-      "${App}TaskDefinition":
-        Type: AWS::ECS::TaskDefinition
-        DependsOn: ContainerImages
-        Properties:
-          Family: !Sub neonbyte-${App}
-          RequiresCompatibilities: [FARGATE]
-          NetworkMode: awsvpc
-          Cpu: "512"
-          Memory: "1024"
-          RuntimePlatform: { CpuArchitecture: ARM64, OperatingSystemFamily: LINUX }
-          ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
-          TaskRoleArn: !GetAtt TaskRole.Arn
-          Volumes: [{ Name: opentelemetry-auto-instrumentation-python }]
-          ContainerDefinitions:
-            - Name: init
-              Image: public.ecr.aws/aws-observability/adot-autoinstrumentation-python:v0.12.2
-              Essential: false
-              Command: [cp, -a, /autoinstrumentation/., /otel-auto-instrumentation-python]
-              MountPoints: [{ SourceVolume: opentelemetry-auto-instrumentation-python, ContainerPath: /otel-auto-instrumentation-python, ReadOnly: false }]
-              LogConfiguration:
-                LogDriver: awslogs
-                Options: { awslogs-group: !Ref CloudWatchAgentLogGroup, awslogs-region: !Ref "AWS::Region", awslogs-stream-prefix: !Sub "${App}-init" }
-            - Name: cloudwatch-agent
-              Image: public.ecr.aws/cloudwatch-agent/cloudwatch-agent:latest
-              Essential: true
-              Cpu: 128
-              Memory: 256
-              Environment:
-                - Name: CW_CONFIG_CONTENT
-                  Value: '{"traces":{"traces_collected":{"application_signals":{}}},"logs":{"metrics_collected":{"application_signals":{}}}}'
-              LogConfiguration:
-                LogDriver: awslogs
-                Options: { awslogs-group: !Ref CloudWatchAgentLogGroup, awslogs-region: !Ref "AWS::Region", awslogs-stream-prefix: !Ref App }
-            - Name: app
-              Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/neonbyte/${App}:${ImageTag}"
-              Essential: true
-              PortMappings: [{ ContainerPort: 8080, Protocol: tcp }]
-              DependsOn:
-                - { ContainerName: init, Condition: SUCCESS }
-                - { ContainerName: cloudwatch-agent, Condition: START }
-              MountPoints: [{ SourceVolume: opentelemetry-auto-instrumentation-python, ContainerPath: /otel-auto-instrumentation-python, ReadOnly: false }]
-              HealthCheck:
-                # Probe without ADOT: with PYTHONPATH -> sitecustomize, every python process would load the
-                # instrumentation and spend ~30 s flushing exporters on exit, failing the health check.
-                Command: [CMD-SHELL, "PYTHONPATH= OTEL_SDK_DISABLED=true python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)\" || exit 1"]
-                Interval: 15
-                Timeout: 5
-                Retries: 3
-                StartPeriod: 60
-              Environment:
-                - { Name: AWS_REGION, Value: !Ref "AWS::Region" }
-                - { Name: PARAMETER_STORE_PREFIX, Value: /neonbyte }
-                - { Name: PRODUCTS_TABLE, Value: !Ref ProductsTable }
-                - { Name: CARTS_TABLE, Value: !Ref CartsTable }
-                - { Name: ORDERS_TABLE, Value: !Ref OrdersTable }
-                - { Name: CATALOG_URL, Value: http://catalog.neonbyte.local:8080 }
-                - { Name: CART_URL, Value: http://cart.neonbyte.local:8080 }
-                - { Name: ORDERS_URL, Value: http://orders.neonbyte.local:8080 }
-                - { Name: PAYMENTS_URL, Value: http://payments.neonbyte.local:8080 }
-                # ADOT Python zero-code instrumentation -> CloudWatch agent sidecar -> Application Signals / X-Ray
-                - { Name: PYTHONPATH, Value: /otel-auto-instrumentation-python/opentelemetry/instrumentation/auto_instrumentation:/app:/otel-auto-instrumentation-python }
-                - { Name: OTEL_RESOURCE_ATTRIBUTES, Value: !Sub "service.name=${App},service.namespace=neonbyte,deployment.environment=ecs:neonbyte-cluster" }
-                - { Name: OTEL_AWS_APPLICATION_SIGNALS_ENABLED, Value: "true" }
-                - { Name: OTEL_METRICS_EXPORTER, Value: none }
-                - { Name: OTEL_LOGS_EXPORTER, Value: none }
-                - { Name: OTEL_EXPORTER_OTLP_PROTOCOL, Value: http/protobuf }
-                - { Name: OTEL_AWS_APPLICATION_SIGNALS_EXPORTER_ENDPOINT, Value: "http://localhost:4316/v1/metrics" }
-                - { Name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, Value: "http://localhost:4316/v1/traces" }
-                - { Name: OTEL_TRACES_SAMPLER, Value: xray }
-                - { Name: OTEL_TRACES_SAMPLER_ARG, Value: "endpoint=http://localhost:2000" }
-                - { Name: OTEL_PROPAGATORS, Value: tracecontext,baggage,xray }
-                - { Name: OTEL_PYTHON_CONFIGURATOR, Value: aws_configurator }
-                - { Name: OTEL_PYTHON_DISTRO, Value: aws_distro }
-                - { Name: OTEL_PYTHON_LOG_CORRELATION, Value: "true" }
-                - { Name: OTEL_PYTHON_EXCLUDED_URLS, Value: /health }
-              LogConfiguration:
-                LogDriver: awslogs
-                Options: { awslogs-group: !Ref { "Fn::Sub": "${App}LogGroup" }, awslogs-region: !Ref "AWS::Region", awslogs-stream-prefix: app }
-
-  Fn::ForEach::BackendServices:
-    - Svc
-    - [catalog, cart, orders, payments]
-    - "${Svc}Service":
-        Type: AWS::ECS::Service
-        DependsOn: [PrivateDefaultRoute, AppIngressFromApp]
-        Properties:
-          ServiceName: !Ref Svc
-          Cluster: !Ref Cluster
-          LaunchType: FARGATE
-          DesiredCount: !Ref ServiceDesiredCount
-          TaskDefinition: !Ref { "Fn::Sub": "${Svc}TaskDefinition" }
-          EnableExecuteCommand: true
-          DeploymentConfiguration:
-            DeploymentCircuitBreaker: { Enable: true, Rollback: true }
-            MinimumHealthyPercent: 100
-            MaximumPercent: 200
-          NetworkConfiguration:
-            AwsvpcConfiguration:
-              AssignPublicIp: DISABLED
-              Subnets: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
-              SecurityGroups: [!Ref AppSecurityGroup]
-          ServiceRegistries: [{ RegistryArn: !GetAtt [!Sub "${Svc}Discovery", Arn] }]
+  # Applies deploy/k8s (rendered) with the current ImageTag; on delete it removes the Ingresses
+  # first so the controller-owned ALBs are gone before the VPC is torn down.
+  K8sApp:
+    Type: Custom::K8sApply
+    DependsOn: [CloudWatchAddon, PodIdentity, BuildAccessEntry, ClusterIngressFromPublicAlb, ClusterIngressFromInternalAlb, PublicSubnet1Routes, PublicSubnet2Routes]
+    Properties:
+      ServiceToken: !GetAtt HelperFunction.Arn
+      ServiceTimeout: 3600
+      Kind: K8sApply
+      Project: !Ref ImageBuildProject
+      ImageTag: !GetAtt ContainerImages.ImageTag
+      Overrides:
+        CLUSTER_NAME: !Ref EksCluster
+        PRODUCTS_TABLE: !Ref ProductsTable
+        CARTS_TABLE: !Ref CartsTable
+        ORDERS_TABLE: !Ref OrdersTable
+        PUBLIC_ALB_SG: !Ref AlbSecurityGroup
+        INTERNAL_ALB_SG: !Ref InternalAlbSecurityGroup
+        REPLICAS: !Ref ServiceDesiredCount
+        LOADGEN_REPLICAS: !Ref LoadGenDesiredCount
+        LOADGEN_USERS: !Ref LoadGenUsers
+        LOADGEN_CHAT_PROBABILITY: !Ref LoadGenChatProbability
 
   # =====================================================================================
-  # Storefront: ALB (CloudFront-only) + ECS service + CloudFront (HTTPS for shoppers)
+  # CloudFront in front of the storefront ALB (created by the EKS load balancer controller)
   # The storefront is a public retail demo site: anonymous browsing is the intended audience.
   # =====================================================================================
-  LoadBalancer:
-    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
-    DependsOn: PublicDefaultRoute
-    Properties:
-      Scheme: internet-facing
-      Subnets: [!Ref PublicSubnet1, !Ref PublicSubnet2]
-      SecurityGroups: [!Ref AlbSecurityGroup]
-      LoadBalancerAttributes:
-        - { Key: routing.http.drop_invalid_header_fields.enabled, Value: "true" }
-        - { Key: idle_timeout.timeout_seconds, Value: "180" }  # assistant chats can take a while
-  StorefrontTargetGroup:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Properties:
-      VpcId: !Ref Vpc
-      TargetType: ip
-      Protocol: HTTP
-      Port: 8080
-      HealthCheckPath: /health
-      HealthCheckIntervalSeconds: 15
-      HealthyThresholdCount: 2
-      TargetGroupAttributes: [{ Key: deregistration_delay.timeout_seconds, Value: "15" }]
-  HttpListener:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Properties:
-      LoadBalancerArn: !Ref LoadBalancer
-      Port: 80
-      Protocol: HTTP
-      DefaultActions: [{ Type: forward, TargetGroupArn: !Ref StorefrontTargetGroup }]
-  StorefrontService:
-    Type: AWS::ECS::Service
-    DependsOn: [HttpListener, PrivateDefaultRoute, AppIngressFromApp, AppIngressFromAlb]
-    Properties:
-      ServiceName: storefront
-      Cluster: !Ref Cluster
-      LaunchType: FARGATE
-      DesiredCount: !Ref ServiceDesiredCount
-      TaskDefinition: !Ref storefrontTaskDefinition
-      EnableExecuteCommand: true
-      HealthCheckGracePeriodSeconds: 60
-      DeploymentConfiguration:
-        DeploymentCircuitBreaker: { Enable: true, Rollback: true }
-      NetworkConfiguration:
-        AwsvpcConfiguration:
-          AssignPublicIp: DISABLED
-          Subnets: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
-          SecurityGroups: [!Ref AppSecurityGroup]
-      LoadBalancers: [{ ContainerName: app, ContainerPort: 8080, TargetGroupArn: !Ref StorefrontTargetGroup }]
-      ServiceRegistries: [{ RegistryArn: !GetAtt storefrontDiscovery.Arn }]
   Distribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -833,7 +803,7 @@ Resources:
         PriceClass: PriceClass_100
         Origins:
           - Id: alb
-            DomainName: !GetAtt LoadBalancer.DNSName
+            DomainName: !GetAtt K8sApp.StorefrontAlbDns
             CustomOriginConfig:
               OriginProtocolPolicy: http-only
               HTTPPort: 80
@@ -852,55 +822,6 @@ Resources:
             ViewerProtocolPolicy: redirect-to-https
             CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6     # Managed-CachingOptimized
             Compress: true
-
-  # =====================================================================================
-  # Traffic generator: simulated shoppers hitting the CloudFront URL (and the assistant)
-  # =====================================================================================
-  LoadGenLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties: { LogGroupName: /neonbyte/ecs/loadgen, RetentionInDays: !Ref LogRetentionDays }
-  LoadGenTaskDefinition:
-    Type: AWS::ECS::TaskDefinition
-    DependsOn: ContainerImages
-    Properties:
-      Family: neonbyte-loadgen
-      RequiresCompatibilities: [FARGATE]
-      NetworkMode: awsvpc
-      Cpu: "256"
-      Memory: "512"
-      RuntimePlatform: { CpuArchitecture: ARM64, OperatingSystemFamily: LINUX }
-      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
-      ContainerDefinitions:
-        - Name: loadgen
-          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/neonbyte/loadgen:${ImageTag}"
-          Essential: true
-          Environment:
-            - { Name: TARGET_URL, Value: !Sub "https://${Distribution.DomainName}" }
-            - { Name: USERS, Value: !Ref LoadGenUsers }
-            - { Name: CHAT_PROBABILITY, Value: !Ref LoadGenChatProbability }
-            - { Name: REPORT_EVERY, Value: "300" }
-          LogConfiguration:
-            LogDriver: awslogs
-            Options: { awslogs-group: !Ref LoadGenLogGroup, awslogs-region: !Ref "AWS::Region", awslogs-stream-prefix: loadgen }
-  LoadGenSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: NeonByte traffic generator (egress only)
-      VpcId: !Ref Vpc
-  LoadGenService:
-    Type: AWS::ECS::Service
-    DependsOn: [StorefrontService, PrivateDefaultRoute]
-    Properties:
-      ServiceName: loadgen
-      Cluster: !Ref Cluster
-      LaunchType: FARGATE
-      DesiredCount: !Ref LoadGenDesiredCount
-      TaskDefinition: !Ref LoadGenTaskDefinition
-      NetworkConfiguration:
-        AwsvpcConfiguration:
-          AssignPublicIp: DISABLED
-          Subnets: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
-          SecurityGroups: [!Ref LoadGenSecurityGroup]
 
   # =====================================================================================
   # AI agents on Amazon Bedrock AgentCore: Guardrail, Memory, 5 Runtimes, Gateway
@@ -1071,9 +992,6 @@ Resources:
             MEMORY_ID: !GetAtt Memory.MemoryId
             GUARDRAIL_ID: !If [GuardrailOn, !GetAtt Guardrail.GuardrailId, ""]
             GUARDRAIL_VERSION: !If [GuardrailOn, !GetAtt Guardrail.Version, ""]
-            CATALOG_URL: http://catalog.neonbyte.local:8080
-            CART_URL: http://cart.neonbyte.local:8080
-            ORDERS_URL: http://orders.neonbyte.local:8080
             BEDROCK_CLAUDE_MODEL_ID: !Ref ClaudeModelId
             BEDROCK_NOVA_LITE_MODEL_ID: !Ref NovaLiteModelId
             BEDROCK_LLAMA_MODEL_ID: !Ref LlamaModelId
@@ -1185,15 +1103,15 @@ Resources:
   DeclinedPaymentsMetricFilter:
     Type: AWS::Logs::MetricFilter
     Properties:
-      LogGroupName: !Ref paymentsLogGroup
-      FilterPattern: '{ $.message = "payment declined" }'
+      LogGroupName: !Ref ContainerInsightsAppLogGroup
+      FilterPattern: '"payment declined"'
       MetricTransformations:
         - { MetricNamespace: NeonByte, MetricName: DeclinedPayments, MetricValue: "1", DefaultValue: 0 }
   OrdersPlacedMetricFilter:
     Type: AWS::Logs::MetricFilter
     Properties:
-      LogGroupName: !Ref ordersLogGroup
-      FilterPattern: '{ $.message = "order placed" }'
+      LogGroupName: !Ref ContainerInsightsAppLogGroup
+      FilterPattern: '"order placed"'
       MetricTransformations:
         - { MetricNamespace: NeonByte, MetricName: OrdersPlaced, MetricValue: "1", DefaultValue: 0 }
   Storefront5xxAlarm:
@@ -1203,7 +1121,7 @@ Resources:
       AlarmDescription: Storefront is returning server errors to shoppers
       Namespace: AWS/ApplicationELB
       MetricName: HTTPCode_Target_5XX_Count
-      Dimensions: [{ Name: LoadBalancer, Value: !GetAtt LoadBalancer.LoadBalancerFullName }]
+      Dimensions: [{ Name: LoadBalancer, Value: !GetAtt K8sApp.StorefrontAlbFullName }]
       Statistic: Sum
       Period: 60
       EvaluationPeriods: 3
@@ -1239,10 +1157,10 @@ Resources:
             {"type":"metric","x":16,"y":2,"width":8,"height":6,"properties":{"title":"Business: orders vs declined payments","region":"${AWS::Region}","stat":"Sum","period":300,"metrics":[
               ["NeonByte","OrdersPlaced"],[".","DeclinedPayments"]]}},
             {"type":"metric","x":0,"y":8,"width":12,"height":6,"properties":{"title":"Application Signals — latency p99 by service","region":"${AWS::Region}","period":60,"metrics":[
-              [{"expression":"SEARCH('{ApplicationSignals,Environment,Service} MetricName=\"Latency\" Environment=\"ecs:neonbyte-cluster\"', 'p99', 60)","id":"lat"}]]}},
+              [{"expression":"SEARCH('{ApplicationSignals,Environment,Service} MetricName=\"Latency\" Environment=\"eks:neonbyte-eks/neonbyte\"', 'p99', 60)","id":"lat"}]]}},
             {"type":"metric","x":12,"y":8,"width":12,"height":6,"properties":{"title":"Application Signals — faults & errors by service","region":"${AWS::Region}","period":60,"metrics":[
-              [{"expression":"SEARCH('{ApplicationSignals,Environment,Service} MetricName=\"Fault\" Environment=\"ecs:neonbyte-cluster\"', 'Sum', 60)","id":"f"}],
-              [{"expression":"SEARCH('{ApplicationSignals,Environment,Service} MetricName=\"Error\" Environment=\"ecs:neonbyte-cluster\"', 'Sum', 60)","id":"e"}]]}},
+              [{"expression":"SEARCH('{ApplicationSignals,Environment,Service} MetricName=\"Fault\" Environment=\"eks:neonbyte-eks/neonbyte\"', 'Sum', 60)","id":"f"}],
+              [{"expression":"SEARCH('{ApplicationSignals,Environment,Service} MetricName=\"Error\" Environment=\"eks:neonbyte-eks/neonbyte\"', 'Sum', 60)","id":"e"}]]}},
             {"type":"metric","x":0,"y":14,"width":8,"height":6,"properties":{"title":"Bedrock invocations by model","region":"${AWS::Region}","period":300,"metrics":[
               [{"expression":"SEARCH('{AWS/Bedrock,ModelId} MetricName=\"Invocations\"', 'Sum', 300)","id":"inv"}]]}},
             {"type":"metric","x":8,"y":14,"width":8,"height":6,"properties":{"title":"Bedrock tokens by model","region":"${AWS::Region}","period":300,"metrics":[
@@ -1252,15 +1170,15 @@ Resources:
               [{"expression":"SEARCH('{AWS/Bedrock,ModelId} MetricName=\"InvocationLatency\"', 'Average', 300)","id":"bl"}]]}},
             {"type":"metric","x":0,"y":20,"width":12,"height":6,"properties":{"title":"AgentCore runtime invocations / errors","region":"${AWS::Region}","period":300,"metrics":[
               [{"expression":"SEARCH('Namespace=\"AWS/Bedrock-AgentCore\" (MetricName=\"Invocations\" OR MetricName=\"SystemErrors\" OR MetricName=\"UserErrors\")', 'Sum', 300)","id":"ac"}]]}},
-            {"type":"metric","x":12,"y":20,"width":12,"height":6,"properties":{"title":"ECS CPU by service (Container Insights)","region":"${AWS::Region}","period":60,"metrics":[
-              [{"expression":"SEARCH('{ECS/ContainerInsights,ClusterName,ServiceName} MetricName=\"CpuUtilized\" ClusterName=\"neonbyte-cluster\"', 'Average', 60)","id":"cpu"}]]}},
+            {"type":"metric","x":12,"y":20,"width":12,"height":6,"properties":{"title":"Pod CPU % (Container Insights)","region":"${AWS::Region}","period":60,"metrics":[
+              [{"expression":"SEARCH('{ContainerInsights,ClusterName,Namespace,Service} MetricName=\"pod_cpu_utilization\" ClusterName=\"neonbyte-eks\" Namespace=\"neonbyte\"', 'Average', 60)","id":"cpu"}]]}},
             {"type":"metric","x":0,"y":26,"width":12,"height":6,"properties":{"title":"DynamoDB consumed capacity","region":"${AWS::Region}","stat":"Sum","period":60,"metrics":[
               ["AWS/DynamoDB","ConsumedReadCapacityUnits","TableName","neonbyte-products"],["...","neonbyte-carts"],["...","neonbyte-orders"],
               [".","ConsumedWriteCapacityUnits",".","neonbyte-products"],["...","neonbyte-carts"],["...","neonbyte-orders"]]}},
             {"type":"log","x":12,"y":26,"width":12,"height":6,"properties":{"title":"Recent warnings & errors (all services)","region":"${AWS::Region}","view":"table",
-              "query":"SOURCE '/neonbyte/ecs/storefront' | SOURCE '/neonbyte/ecs/catalog' | SOURCE '/neonbyte/ecs/cart' | SOURCE '/neonbyte/ecs/orders' | SOURCE '/neonbyte/ecs/payments' | fields @timestamp, service, level, message, traceId | filter level in ['WARNING','ERROR'] | sort @timestamp desc | limit 50"}}
+              "query":"SOURCE '/aws/containerinsights/neonbyte-eks/application' | fields @timestamp, kubernetes.container_name as svc, @message | filter kubernetes.namespace_name = 'neonbyte' and @message like /WARNING|ERROR/ | sort @timestamp desc | limit 50"}}
           ]}
-        - Alb: !GetAtt LoadBalancer.LoadBalancerFullName
+        - Alb: !GetAtt K8sApp.StorefrontAlbFullName
           Url: !Sub "https://${Distribution.DomainName}"
 
 Outputs:
@@ -1277,6 +1195,10 @@ Outputs:
     Value: !GetAtt OrchestratorRuntime.AgentRuntimeArn
   GatewayUrl:
     Value: !GetAtt Gateway.GatewayUrl
+  EksClusterName:
+    Value: !Ref EksCluster
+  KubectlConfigCommand:
+    Value: !Sub aws eks update-kubeconfig --name ${EksCluster} --region ${AWS::Region}
   ImageBuildProject:
     Description: CodeBuild project that builds the images (see its logs if the stack waits on ContainerImages)
     Value: !Ref ImageBuildProject

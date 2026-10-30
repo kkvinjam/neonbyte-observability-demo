@@ -4,14 +4,15 @@ NeonByte is an electronics web store built to **demonstrate end-to-end observabi
 the same idea as the [One Observability Demo](https://github.com/aws-samples/one-observability-demo)
 (pet adoption), re-imagined as an e-commerce site with a **multi-agent AI shopping assistant**.
 
-* **5 Python microservices** (storefront, catalog, cart, orders, payments) on **Amazon ECS Fargate** (Graviton),
-  instrumented with zero code by the **ADOT Python auto-instrumentation** + a **CloudWatch agent sidecar**
-  → **Application Signals**, X-Ray traces, and JSON logs with trace IDs.
+* **5 Python microservices** (storefront, catalog, cart, orders, payments) on **Amazon EKS Auto Mode** (Graviton),
+  instrumented with zero code by the **amazon-cloudwatch-observability add-on**. A pod annotation makes
+  its operator inject the ADOT Python auto-instrumentation, which feeds **Application Signals**, X-Ray traces,
+  **Container Insights** and JSON logs with trace IDs (via Fluent Bit).
 * **5 AI agents** in five frameworks, on **Amazon Bedrock AgentCore Runtime**, talking to each other through an
   **AgentCore Gateway** (SigV4). They use **AgentCore Memory** and an **Amazon Bedrock Guardrail**, and every LLM and tool call is
   traced in **CloudWatch GenAI Observability**.
 * **One CloudFormation template** deploys everything — it even builds the container images from source.
-* A **traffic generator** simulates shoppers (and assistant chats), locally or as an ECS service.
+* A **traffic generator** simulates shoppers (and assistant chats), locally or as a Kubernetes deployment.
 * **Fault injection** knobs (latency, errors, card declines) flip at runtime via SSM — no redeploy.
 
 ## Architecture
@@ -19,9 +20,9 @@ the same idea as the [One Observability Demo](https://github.com/aws-samples/one
 ```mermaid
 flowchart LR
   shopper((Shopper / loadgen)) -->|HTTPS| cf[CloudFront]
-  cf -->|CloudFront prefix list only| alb[ALB]
+  cf -->|CloudFront prefix list only| alb[public ALB<br/>Ingress]
   alb --> sf[storefront<br/>FastAPI + UI]
-  subgraph ECS["ECS Fargate · ADOT + CloudWatch agent sidecars"]
+  subgraph EKS["EKS Auto Mode · CloudWatch Observability add-on"]
     sf --> cat[catalog] & cart[cart] & ord[orders]
     ord --> cart & cat & pay[payments]
   end
@@ -35,8 +36,8 @@ flowchart LR
     gw --> con[Concierge<br/>OpenAI Agents SDK · gpt-oss-120b]
     orch -.-> mem[(AgentCore Memory)]
   end
-  adv & od & sup & con -->|tools: HTTP| cat & cart & ord
-  ECS & AC -.->|traces · metrics · logs| cw[CloudWatch<br/>Application Signals · X-Ray · GenAI Observability · Logs]
+  adv & od & sup & con -->|tools: HTTP| ialb[internal ALB<br/>Ingress] --> cat & cart & ord
+  EKS & AC -.->|traces · metrics · logs| cw[CloudWatch<br/>Application Signals · X-Ray · GenAI Observability · Logs]
 ```
 
 ### The agents
@@ -59,12 +60,12 @@ Signals map draws orchestrator → sub-agent edges (the same technique the refer
 
 ### Telemetry, as in the reference
 
-| Signal | ECS microservices | AgentCore agents |
+| Signal | EKS microservices | AgentCore agents |
 | --- | --- | --- |
-| Traces | ADOT Python (init container → `PYTHONPATH`) → CloudWatch agent sidecar (`:4316`) → X-Ray / Transaction Search | ADOT `opentelemetry-instrument` with `AGENT_OBSERVABILITY_ENABLED=true` → X-Ray OTLP endpoint; runtime vended traces → X-Ray delivery |
-| Metrics | Application Signals (latency/faults/errors per operation), Container Insights *enhanced*, ALB, DynamoDB, log metric filters (`NeonByte/OrdersPlaced`, `DeclinedPayments`) | `bedrock-agentcore` + GenAI Observability (sessions, tokens, latency), `AWS/Bedrock` per model |
-| Logs | JSON to `/neonbyte/ecs/<svc>` with `traceId` (X-Ray format) for log↔trace correlation | `/aws/bedrock-agentcore/runtimes/*` + vended `APPLICATION_LOGS` |
-| Infra | VPC Flow Logs → `/neonbyte/vpc/flowlogs`; CodeBuild logs | — |
+| Traces | `instrumentation.opentelemetry.io/inject-python` → operator-injected ADOT Python → CloudWatch agent DaemonSet → X-Ray / Transaction Search | ADOT `opentelemetry-instrument` with `AGENT_OBSERVABILITY_ENABLED=true` → X-Ray OTLP endpoint; runtime vended traces → X-Ray delivery |
+| Metrics | Application Signals (latency/faults/errors per operation, environment `eks:neonbyte-eks/neonbyte`), Container Insights *enhanced* (EKS), ALB, DynamoDB, log metric filters (`NeonByte/OrdersPlaced`, `DeclinedPayments`) | `bedrock-agentcore` + GenAI Observability (sessions, tokens, latency), `AWS/Bedrock` per model |
+| Logs | JSON container logs → Fluent Bit → `/aws/containerinsights/neonbyte-eks/application`, with `traceId` (X-Ray format) for log↔trace correlation | `/aws/bedrock-agentcore/runtimes/*` + vended `APPLICATION_LOGS` |
+| Infra | VPC Flow Logs → `/neonbyte/vpc/flowlogs`; EKS control-plane logs (api, audit, authenticator); Container Insights node/pod metrics; CodeBuild logs | — |
 
 The stack also enables **Application Signals discovery** and **X-Ray Transaction Search** and creates
 the **NeonByte-&lt;region&gt; dashboard** plus two alarms.
@@ -81,9 +82,10 @@ agents/
     common/                config, models (single source of truth), memory, store client, AgentCore server
     knowledge/             buying guides, policies, troubleshooting (keyword retrieval)
   deploy/                  Dockerfile (AGENT build-arg, ARM64) + pinned-per-agent requirements
-traffic/loadgen.py         traffic generator (local CLI and ECS service)
+traffic/loadgen.py         traffic generator (local CLI and EKS deployment)
 deploy/cloudformation/     neonbyte.yaml — the whole application in one template
-deploy/scripts/            deploy.sh · destroy.sh · build-images.sh · chaos.sh
+deploy/k8s/render.py       renders the Kubernetes manifests (Deployments, Services, Ingresses, NodePool)
+deploy/scripts/            deploy.sh · destroy.sh · build-images.sh · k8s-apply.sh · chaos.sh
 local/run-local.sh         run everything as local processes
 docker-compose*.yml        run everything in containers (Jaeger, or CloudWatch for agents)
 tests/                     in-process end-to-end tests + template checks
@@ -120,8 +122,8 @@ docker compose up --build                       # storefront http://127.0.0.1:80
 docker compose --profile load up --build        # + traffic generator
 ```
 
-The containers are instrumented exactly as on ECS (the ADOT init container fills a shared volume and
-`PYTHONPATH` activates it), but export OTLP to Jaeger instead of the CloudWatch agent.
+The containers get the same ADOT Python auto-instrumentation the EKS operator injects: an init container
+fills a shared volume and `PYTHONPATH` activates it. Locally they export OTLP to Jaeger instead of the CloudWatch agent.
 
 **Send local agent telemetry to CloudWatch:** with Transaction Search enabled in the account (the stack
 does it) and the log group `/neonbyte/local/agents` present, run
@@ -140,10 +142,17 @@ deploy/scripts/deploy.sh             # ≈ 25-35 min on first deploy
 ```
 
 `deploy.sh` zips this checkout into a private S3 bucket (`neonbyte-artifacts-<account>-<region>`,
-Block Public Access on), then runs `aws cloudformation deploy`. Inside the stack, a custom resource
-starts a **CodeBuild (arm64)** build that builds and pushes all 11 images. When the build finishes,
-CodeBuild signals CloudFormation, and the stack goes on to create the ECS services and AgentCore runtimes.
-The outputs print the **StorefrontUrl**, dashboard and console links.
+Block Public Access on), then runs `aws cloudformation deploy`. Inside the stack:
+
+1. A custom resource starts a **CodeBuild (arm64)** build that builds and pushes all 11 images, then signals CloudFormation.
+2. CloudFormation creates the **EKS Auto Mode** cluster, the CloudWatch Observability add-on, a Pod Identity
+   association, the AgentCore runtimes, the Gateway and the Memory.
+3. A second custom resource runs CodeBuild again to apply the manifests (`deploy/k8s/render.py`) and wait for the
+   two ALBs the EKS load balancer controller creates. It returns their DNS names to the stack, which then
+   creates CloudFront in front of the public ALB and publishes the internal ALB URL to SSM for the agents.
+
+The outputs print the **StorefrontUrl**, the `kubectl` config command, the dashboard and console links.
+Whoever creates the stack gets cluster-admin, so `kubectl get pods -n neonbyte` works right away.
 
 Other ways to launch:
 
@@ -159,13 +168,14 @@ Key parameters (`--param Key=Value` with `deploy.sh`):
 
 | Parameter | Default | Notes |
 | --- | --- | --- |
-| `LoadGenDesiredCount` / `LoadGenUsers` | 1 / 5 | traffic generator tasks × simulated shoppers (0 = off) |
+| `LoadGenDesiredCount` / `LoadGenUsers` | 1 / 5 | traffic generator pods × simulated shoppers (0 = off) |
 | `LoadGenChatProbability` | 0.05 | chance per journey of an assistant chat — **the main Bedrock cost driver** |
 | `ClaudeModelId`, `NovaLiteModelId`, `LlamaModelId`, `GptOssModelId` | `us.` inference profiles | use `eu.`/`apac.` profiles outside the US |
 | `AvailabilityZoneId1/2` | per-region map | AZ **IDs** supported by AgentCore VPC mode (e.g. `use1-az1`, `use1-az2`) |
 | `EnableTransactionSearch` / `EnableApplicationSignalsDiscovery` | true | set **false** if already enabled in the account/region |
 | `EnableGuardrail` | true | Bedrock Guardrail on the Claude-backed agents |
-| `ServiceDesiredCount` | 1 | tasks per microservice |
+| `ServiceDesiredCount` | 1 | pod replicas per microservice |
+| `KubernetesVersion` | 1.36 | EKS version |
 
 > One NeonByte stack per account/region: resource names (runtimes, tables, `/neonbyte/*` parameters) are fixed.
 
@@ -179,9 +189,11 @@ includes the Marketplace subscribe permissions that some first invocations need.
 ### Security notes
 
 * The storefront is a **public demo shop** for anonymous visitors (like any retail site), served over
-  HTTPS by CloudFront. The ALB accepts traffic **only from CloudFront's origin-facing prefix list**. Every
-  service and agent runs in private subnets, and their security group allows port 8080 only from the
-  ALB and from each other.
+  HTTPS by CloudFront. The public ALB accepts traffic **only from CloudFront's origin-facing prefix list**.
+  Pods and agents run in private subnets. Pods accept port 8080 only from the two ALBs (and from each other inside the cluster),
+  and the internal ALB accepts traffic only from the agents' security group.
+* The EKS API endpoint is public and IAM-authenticated (SigV4 + access entries), so CodeBuild and your laptop can
+  run `kubectl`. Only the stack creator and the CodeBuild role have access entries.
 * Anyone with the URL can chat with the assistant, which invokes Bedrock models in your account. Delete the
   stack when you are done, and keep `LoadGenChatProbability` low. To restrict access, put the distribution
   behind AWS WAF (IP allow list) or Cognito, or delete the CloudFront distribution and reach the ALB through
@@ -191,27 +203,29 @@ includes the Marketplace subscribe permissions that some first invocations need.
   `runtime/NeonByteOrchestrator*`.
 * Locally, every process binds to `127.0.0.1`. Docker compose publishes only the storefront and the Jaeger UI,
   and only on loopback.
-* This is a demo: there is no real login (pick a shopper from the header), payments are simulated, and one task role
-  is shared by the five services.
+* This is a demo: there is no real login (pick a shopper from the header), payments are simulated, and one IAM role
+  is shared by the five services (one Pod Identity service account).
 
 ## Observability walkthrough (things to try)
 
 1. **Service map:** CloudWatch → Application Signals → *Service Map*. You'll see shopper → storefront →
    catalog/cart/orders → payments → DynamoDB, plus storefront → `NeonByteOrchestrator` → sub-agents.
-2. **A chat, end to end:** ask Sparky *"Recommend noise-cancelling earbuds and add them to my cart"*.
+2. **Kubernetes view:** CloudWatch → Container Insights → *neonbyte-eks* (pods, nodes, namespace), or
+   `kubectl -n neonbyte get pods,ingress` after running the `KubectlConfigCommand` output.
+3. **A chat, end to end:** ask Sparky *"Recommend noise-cancelling earbuds and add them to my cart"*.
    In **GenAI Observability → Bedrock AgentCore**, open the session. The trace shows the Strands
    orchestrator, two delegations through the Gateway, the LangGraph and CrewAI spans, the Bedrock model calls (with tokens) and
    the HTTP tool calls into catalog/cart, all in one trace.
-3. **Inject latency:** `deploy/scripts/chaos.sh latency payments 1500`. Checkout p99 jumps on the
+4. **Inject latency:** `deploy/scripts/chaos.sh latency payments 1500`. Checkout p99 jumps on the
    dashboard and in Application Signals (`orders` → `payments` edge). Reset with `chaos.sh reset`.
-4. **Inject faults:** `chaos.sh errors catalog 0.2` — storefront 5xx alarm fires; X-Ray shows the faulting
+5. **Inject faults:** `chaos.sh errors catalog 0.2` — storefront 5xx alarm fires; X-Ray shows the faulting
    segment; the dashboard log widget lists the `chaos: injected failure` lines with their `traceId`.
-5. **Business errors:** `chaos.sh declines 0.5` — 402s (errors, not faults) and the
+6. **Business errors:** `chaos.sh declines 0.5` — 402s (errors, not faults) and the
    `neonbyte-payment-declines` alarm, driven by a log metric filter.
-6. **Logs ↔ traces:** in Logs Insights on `/neonbyte/ecs/orders`, query
-   `fields @timestamp, message, order_id, traceId | filter message = "order placed"`. Paste a
+7. **Logs ↔ traces:** in Logs Insights on `/aws/containerinsights/neonbyte-eks/application`, query
+   `fields @timestamp, kubernetes.container_name, @message | filter @message like /order placed/`. Paste a
    `traceId` into Transaction Search.
-7. **Agent quality and cost:** compare per-model `InputTokenCount` and latency on the dashboard. Swap the Order Desk
+8. **Agent quality and cost:** compare per-model `InputTokenCount` and latency on the dashboard. Swap the Order Desk
    model with `--param NovaLiteModelId=...` and compare.
 
 ## Tests
@@ -223,8 +237,11 @@ make lint-cfn    # cfn-lint for us-east-1 and us-west-2
 
 ## Troubleshooting
 
-* **Stack waits on `ContainerImages`:** open the `neonbyte-image-build` CodeBuild project logs. If the
-  build fails, the stack rolls back with the build ID in the reason.
+* **Stack waits on `ContainerImages` or `K8sApp`:** open the `neonbyte-image-build` CodeBuild project logs
+  (one build per step). If a step fails, the stack rolls back with the build ID in the reason.
+* **Pods Pending:** `kubectl get nodeclaims` — Auto Mode is provisioning Graviton nodes for the `neonbyte-arm64` NodePool.
+* **Slow delete or `DELETE_FAILED` on subnets:** AgentCore Runtime's VPC network interfaces are released
+  asynchronously (can take up to about an hour). Retry the delete once they are gone.
 * **`TransactionSearch` or `ApplicationSignalsDiscovery` fails:** it's already configured in the account.
   Redeploy with `--param EnableTransactionSearch=false` and/or `EnableApplicationSignalsDiscovery=false`.
 * **Runtime creation fails with a subnet/AZ error:** pass AgentCore-supported AZ IDs via
