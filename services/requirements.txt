@@ -1,0 +1,10 @@
+# Shared by every NeonByte microservice image.
+# OpenTelemetry is NOT installed here: on ECS (and in docker compose) the ADOT
+# Python auto-instrumentation is copied in by an init container and activated
+# through PYTHONPATH, exactly like the reference petlistadoptions-py service.
+fastapi==0.116.1
+uvicorn==0.35.0
+httpx==0.28.1
+boto3==1.40.10
+jinja2==3.1.6
+pydantic==2.11.7

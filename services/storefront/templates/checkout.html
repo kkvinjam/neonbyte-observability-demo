@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Checkout</h1>
+{% if not cart['items'] %}
+<p>Your cart is empty. <a href="/">Keep shopping</a>.</p>
+{% else %}
+<div class="checkout">
+  <form id="checkout-form" class="panel">
+    <h2>Shipping</h2>
+    <label>Full name <input name="name" value="{{ user.name }}" required></label>
+    <label>Street <input name="street" value="{{ user.street }}" required></label>
+    <div class="cols">
+      <label>City <input name="city" value="{{ user.city }}" required></label>
+      <label>State <input name="state" value="{{ user.state }}" required size="3"></label>
+      <label>ZIP <input name="zip" value="{{ user.zip }}" required size="6"></label>
+    </div>
+    <h2>Payment</h2>
+    <label>Card number <input name="card" value="4242 4242 4242 4242" required></label>
+    <p class="muted">Demo only — no real charges. A card ending in 0000 is always declined.</p>
+    <button class="btn">Place order · {{ cart.total_cents|money }}</button>
+    <p id="checkout-result"></p>
+  </form>
+  <aside class="panel">
+    <h2>Summary</h2>
+    {% for i in cart['items'] %}<div class="row"><span>{{ i.quantity }} × {{ i.name }}</span><span>{{ (i.price_cents * i.quantity)|money }}</span></div>{% endfor %}
+    <div class="row total"><span>Total</span><span>{{ cart.total_cents|money }}</span></div>
+  </aside>
+</div>
+{% endif %}
+{% endblock %}

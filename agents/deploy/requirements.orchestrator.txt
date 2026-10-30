@@ -1,0 +1,8 @@
+# Orchestrator runtime (Strands). Reaches sub-agents through the AgentCore Gateway (SigV4).
+strands-agents
+strands-agents-tools
+boto3
+httpx
+python-dotenv
+bedrock-agentcore
+aws-opentelemetry-distro>=0.18.0

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ product.name }} · NeonByte{% endblock %}
+{% block content %}
+<a href="/?category={{ product.category }}" class="muted">← {{ product.category|replace('-', ' ')|title }}</a>
+<section class="detail">
+  <div class="thumb big">{{ icons.get(product.category, '🔋') }}</div>
+  <div>
+    <div class="brand">{{ product.brand }}</div>
+    <h1>{{ product.name }}</h1>
+    <div class="rating">★ {{ product.rating }} · {{ product.warranty_months }}-month warranty</div>
+    <p>{{ product.description }}</p>
+    <p class="price big">{{ product.price_cents|money }}</p>
+    <p class="muted">{% if product.stock > 0 %}{{ product.stock }} in stock{% else %}Out of stock{% endif %}</p>
+    <button class="add" data-id="{{ product.product_id }}" {% if product.stock < 1 %}disabled{% endif %}>Add to cart</button>
+    <table class="specs">
+      {% for k, v in product.specs.items() %}<tr><th>{{ k|replace('_', ' ')|title }}</th><td>{{ v }}</td></tr>{% endfor %}
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,31 @@
+# Union of all five agents' dependencies, for local work outside containers.
+# Images install only deploy/requirements.<agent>.txt.
+
+# Orchestrator
+strands-agents
+strands-agents-tools
+
+# Product Advisor (LangGraph)
+langgraph
+langchain-aws
+langchain-core
+
+# Order Desk (CrewAI, talks to Bedrock via LiteLLM)
+crewai
+
+# Support (LlamaIndex on Bedrock Converse)
+llama-index-core
+llama-index-llms-bedrock-converse
+
+# Concierge (OpenAI Agents SDK -> Bedrock via LiteLLM / SigV4)
+openai-agents[litellm]
+
+# Shared
+httpx
+python-dotenv
+boto3
+bedrock-agentcore
+
+# Observability — ADOT auto-instruments CrewAI, LangChain/LangGraph,
+# LlamaIndex, and OpenAI Agents; Strands emits OTel natively.
+aws-opentelemetry-distro>=0.18.0

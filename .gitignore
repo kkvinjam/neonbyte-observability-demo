@@ -1,0 +1,9 @@
+.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.env
+agents/.env
+local/logs/
+*.zip
+.DS_Store

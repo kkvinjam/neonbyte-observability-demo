@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <h1>Gear that glows.</h1>
+  <p>Laptops, phones, audio and smart home — with an AI assistant that actually checks the stock.</p>
+</section>
+<div class="chips">
+  <a href="/" class="chip {% if not category %}active{% endif %}">All</a>
+  {% for c in categories %}
+    <a href="/?category={{ c.category }}" class="chip {% if c.category == category %}active{% endif %}">{{ icons.get(c.category, '🔋') }} {{ c.category|replace('-', ' ')|title }}</a>
+  {% endfor %}
+</div>
+{% if q %}<p class="muted">{{ products|length }} result(s) for “{{ q }}”</p>{% endif %}
+<div class="grid">
+  {% for p in products %}
+  <article class="card">
+    <a href="/product/{{ p.product_id }}" class="thumb">{{ icons.get(p.category, '🔋') }}</a>
+    <div class="card-body">
+      <div class="brand">{{ p.brand }}</div>
+      <a href="/product/{{ p.product_id }}" class="name">{{ p.name }}</a>
+      <div class="rating">★ {{ p.rating }}</div>
+      <div class="row"><span class="price">{{ p.price_cents|money }}</span>
+        <button class="add" data-id="{{ p.product_id }}" {% if p.stock < 1 %}disabled{% endif %}>{% if p.stock < 1 %}Sold out{% else %}Add to cart{% endif %}</button></div>
+    </div>
+  </article>
+  {% else %}
+  <p>No products match. Try asking Sparky!</p>
+  {% endfor %}
+</div>
+{% endblock %}

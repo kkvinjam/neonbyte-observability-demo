@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}NeonByte Electronics{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="logo" href="/">⚡ Neon<span>Byte</span></a>
+  <form class="search" action="/" method="get">
+    <input name="q" placeholder="Search laptops, headphones, TVs…" value="{{ q|default('') }}">
+    <button>Search</button>
+  </form>
+  <nav>
+    <select id="user-switch" title="Shopping as">
+      {% for uid, u in users.items() %}
+        <option value="{{ uid }}" {% if uid == user_id %}selected{% endif %}>{{ u.name }}</option>
+      {% endfor %}
+      {% if user_id not in users %}<option value="{{ user_id }}" selected>{{ user.name }}</option>{% endif %}
+    </select>
+    <a href="/orders">Orders</a>
+    <a href="/cart" class="cart-link">🛒 <span id="cart-count">{{ cart_count }}</span></a>
+  </nav>
+</header>
+<main>{% block content %}{% endblock %}</main>
+<footer>NeonByte Electronics · an observability demo store · prices are fictional</footer>
+
+<button id="chat-toggle" title="Ask Sparky">💬 Ask Sparky</button>
+<section id="chat" hidden>
+  <div class="chat-head">⚡ Sparky — your NeonByte assistant <button id="chat-close">✕</button></div>
+  <div id="chat-log">
+    <div class="msg bot">Hi {{ user.name.split(' ')[0] }}! I can recommend gear, compare products, add things to your cart, check out, track orders or start a return.</div>
+  </div>
+  <form id="chat-form"><input id="chat-input" autocomplete="off" placeholder="e.g. Best headphones under $300?"><button>Send</button></form>
+</section>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+# Product Advisor runtime (LangGraph on Bedrock Converse).
+langgraph
+langchain-aws
+langchain-core
+boto3
+httpx
+python-dotenv
+bedrock-agentcore
+aws-opentelemetry-distro>=0.18.0

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Order history — {{ user.name }}</h1>
+{% for o in orders %}
+<div class="panel order">
+  <div class="row"><strong>{{ o.order_id }}</strong><span class="status {{ o.status|lower }}">{{ o.status }}</span></div>
+  <div class="muted">Ship to {{ o.shipping.name }}, {{ o.shipping.city }} · {{ o.total_cents|money }}</div>
+  <ul>{% for i in o['items'] %}<li>{{ i.quantity }} × {{ i.name }}</li>{% endfor %}</ul>
+  {% if o.status == 'CONFIRMED' %}<button class="return link" data-id="{{ o.order_id }}">Request return</button>{% endif %}
+</div>
+{% else %}
+<p>No orders yet. <a href="/">Start shopping</a>.</p>
+{% endfor %}
+{% endblock %}

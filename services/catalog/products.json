@@ -1,0 +1,557 @@
+[
+ {
+  "product_id": "NB-0001",
+  "name": "Voltix AeroBook 14",
+  "brand": "Voltix",
+  "category": "laptops",
+  "price_cents": 119900,
+  "stock": 56,
+  "rating": 4.8,
+  "description": "Ultra-light 14\" laptop with all-day battery.",
+  "specs": {
+   "cpu": "8-core ARM",
+   "ram": "16 GB",
+   "storage": "512 GB SSD",
+   "display": "14\" 2.8K OLED",
+   "battery": "20 h",
+   "weight": "1.1 kg"
+  },
+  "warranty_months": 24
+ },
+ {
+  "product_id": "NB-0002",
+  "name": "Voltix ProBook 16",
+  "brand": "Voltix",
+  "category": "laptops",
+  "price_cents": 229900,
+  "stock": 65,
+  "rating": 4.4,
+  "description": "Creator laptop with discrete GPU and mini-LED display.",
+  "specs": {
+   "cpu": "14-core",
+   "gpu": "RTX-class 8 GB",
+   "ram": "32 GB",
+   "storage": "1 TB SSD",
+   "display": "16\" mini-LED 120 Hz",
+   "weight": "2.1 kg"
+  },
+  "warranty_months": 24
+ },
+ {
+  "product_id": "NB-0003",
+  "name": "Quantix Chromebook Go",
+  "brand": "Quantix",
+  "category": "laptops",
+  "price_cents": 34900,
+  "stock": 24,
+  "rating": 4.7,
+  "description": "Affordable Chromebook for school and browsing.",
+  "specs": {
+   "cpu": "4-core",
+   "ram": "8 GB",
+   "storage": "128 GB eMMC",
+   "display": "13.3\" FHD",
+   "battery": "12 h"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0004",
+  "name": "Quantix Strix G15 Gaming",
+  "brand": "Quantix",
+  "category": "laptops",
+  "price_cents": 169900,
+  "stock": 27,
+  "rating": 4.1,
+  "description": "15\" gaming laptop with 240 Hz panel.",
+  "specs": {
+   "cpu": "16-core",
+   "gpu": "RTX-class 12 GB",
+   "ram": "32 GB",
+   "storage": "1 TB SSD",
+   "display": "15.6\" 240 Hz"
+  },
+  "warranty_months": 24
+ },
+ {
+  "product_id": "NB-0005",
+  "name": "Nimbus X12 Pro",
+  "brand": "Nimbus",
+  "category": "smartphones",
+  "price_cents": 109900,
+  "stock": 22,
+  "rating": 4.8,
+  "description": "Flagship phone with periscope zoom camera.",
+  "specs": {
+   "display": "6.7\" LTPO OLED",
+   "storage": "256 GB",
+   "camera": "50 MP + 5x tele",
+   "battery": "5000 mAh",
+   "5g": "yes"
+  },
+  "warranty_months": 24
+ },
+ {
+  "product_id": "NB-0006",
+  "name": "Nimbus X12",
+  "brand": "Nimbus",
+  "category": "smartphones",
+  "price_cents": 79900,
+  "stock": 42,
+  "rating": 3.6,
+  "description": "Flagship performance in a compact body.",
+  "specs": {
+   "display": "6.1\" OLED",
+   "storage": "128 GB",
+   "camera": "50 MP dual",
+   "battery": "4300 mAh",
+   "5g": "yes"
+  },
+  "warranty_months": 24
+ },
+ {
+  "product_id": "NB-0007",
+  "name": "Pixelon 9a",
+  "brand": "Pixelon",
+  "category": "smartphones",
+  "price_cents": 49900,
+  "stock": 70,
+  "rating": 4.1,
+  "description": "Mid-range phone with a best-in-class camera.",
+  "specs": {
+   "display": "6.3\" OLED 120 Hz",
+   "storage": "128 GB",
+   "camera": "48 MP",
+   "battery": "4800 mAh"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0008",
+  "name": "Pixelon Fold",
+  "brand": "Pixelon",
+  "category": "smartphones",
+  "price_cents": 179900,
+  "stock": 45,
+  "rating": 3.7,
+  "description": "Foldable phone that opens into a tablet.",
+  "specs": {
+   "display": "7.6\" inner / 6.2\" outer",
+   "storage": "512 GB",
+   "camera": "50 MP triple"
+  },
+  "warranty_months": 24
+ },
+ {
+  "product_id": "NB-0009",
+  "name": "Sonora QuietPods Pro",
+  "brand": "Sonora",
+  "category": "audio",
+  "price_cents": 24900,
+  "stock": 69,
+  "rating": 3.7,
+  "description": "Noise-cancelling true wireless earbuds.",
+  "specs": {
+   "anc": "adaptive",
+   "battery": "8 h (+24 h case)",
+   "water_resistance": "IPX4",
+   "codec": "AAC/LDAC"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0010",
+  "name": "Sonora Studio 700 Headphones",
+  "brand": "Sonora",
+  "category": "audio",
+  "price_cents": 34900,
+  "stock": 87,
+  "rating": 3.8,
+  "description": "Over-ear ANC headphones with 30 h battery.",
+  "specs": {
+   "anc": "yes",
+   "battery": "30 h",
+   "driver": "40 mm",
+   "multipoint": "yes"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0011",
+  "name": "Beatwave Boom Mini",
+  "brand": "Beatwave",
+  "category": "audio",
+  "price_cents": 5900,
+  "stock": 43,
+  "rating": 4.4,
+  "description": "Pocket Bluetooth speaker, waterproof.",
+  "specs": {
+   "battery": "12 h",
+   "water_resistance": "IP67",
+   "power": "5 W"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0012",
+  "name": "Beatwave Soundbar 5.1",
+  "brand": "Beatwave",
+  "category": "audio",
+  "price_cents": 44900,
+  "stock": 89,
+  "rating": 4.8,
+  "description": "Dolby Atmos soundbar with wireless subwoofer.",
+  "specs": {
+   "channels": "5.1.2",
+   "power": "450 W",
+   "hdmi_earc": "yes"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0013",
+  "name": "Lumina 55\" 4K OLED TV",
+  "brand": "Lumina",
+  "category": "tvs",
+  "price_cents": 129900,
+  "stock": 88,
+  "rating": 4.4,
+  "description": "Perfect blacks and 120 Hz for gaming.",
+  "specs": {
+   "size": "55\"",
+   "panel": "OLED",
+   "refresh": "120 Hz",
+   "hdr": "Dolby Vision, HDR10"
+  },
+  "warranty_months": 24
+ },
+ {
+  "product_id": "NB-0014",
+  "name": "Lumina 65\" QLED TV",
+  "brand": "Lumina",
+  "category": "tvs",
+  "price_cents": 89900,
+  "stock": 21,
+  "rating": 4.9,
+  "description": "Bright QLED panel for sunny living rooms.",
+  "specs": {
+   "size": "65\"",
+   "panel": "QLED",
+   "refresh": "60 Hz",
+   "hdr": "HDR10+"
+  },
+  "warranty_months": 24
+ },
+ {
+  "product_id": "NB-0015",
+  "name": "Lumina 43\" Smart LED TV",
+  "brand": "Lumina",
+  "category": "tvs",
+  "price_cents": 29900,
+  "stock": 20,
+  "rating": 4.3,
+  "description": "Compact smart TV for bedrooms.",
+  "specs": {
+   "size": "43\"",
+   "panel": "LED",
+   "refresh": "60 Hz"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0016",
+  "name": "Pulse Watch 5",
+  "brand": "Pulse",
+  "category": "wearables",
+  "price_cents": 39900,
+  "stock": 32,
+  "rating": 4.0,
+  "description": "Smartwatch with ECG, GPS and 2-day battery.",
+  "specs": {
+   "display": "1.9\" AMOLED",
+   "gps": "dual-band",
+   "battery": "48 h",
+   "water_resistance": "5 ATM"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0017",
+  "name": "Pulse Fit Band",
+  "brand": "Pulse",
+  "category": "wearables",
+  "price_cents": 7900,
+  "stock": 33,
+  "rating": 4.3,
+  "description": "Slim fitness tracker with sleep tracking.",
+  "specs": {
+   "battery": "10 days",
+   "heart_rate": "yes",
+   "water_resistance": "5 ATM"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0018",
+  "name": "Pulse Ring",
+  "brand": "Pulse",
+  "category": "wearables",
+  "price_cents": 29900,
+  "stock": 88,
+  "rating": 4.0,
+  "description": "Smart ring for health tracking, no screen.",
+  "specs": {
+   "battery": "7 days",
+   "sensors": "HR, SpO2, temp"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0019",
+  "name": "Optix Z50 Mirrorless",
+  "brand": "Optix",
+  "category": "cameras",
+  "price_cents": 99900,
+  "stock": 119,
+  "rating": 4.5,
+  "description": "24 MP mirrorless camera with 4K60 video.",
+  "specs": {
+   "sensor": "APS-C 24 MP",
+   "video": "4K60",
+   "ibis": "5-axis"
+  },
+  "warranty_months": 24
+ },
+ {
+  "product_id": "NB-0020",
+  "name": "Optix Action 4",
+  "brand": "Optix",
+  "category": "cameras",
+  "price_cents": 34900,
+  "stock": 28,
+  "rating": 4.4,
+  "description": "Rugged action camera with stabilization.",
+  "specs": {
+   "video": "5.3K60",
+   "water_resistance": "10 m",
+   "stabilization": "electronic"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0021",
+  "name": "Optix Drone Air",
+  "brand": "Optix",
+  "category": "cameras",
+  "price_cents": 79900,
+  "stock": 96,
+  "rating": 3.8,
+  "description": "Foldable drone with 4K camera, 34 min flight.",
+  "specs": {
+   "video": "4K60 HDR",
+   "flight_time": "34 min",
+   "range": "10 km"
+  },
+  "warranty_months": 24
+ },
+ {
+  "product_id": "NB-0022",
+  "name": "Nexus Console X",
+  "brand": "Nexus",
+  "category": "gaming",
+  "price_cents": 49900,
+  "stock": 27,
+  "rating": 4.3,
+  "description": "Next-gen console with 1 TB SSD.",
+  "specs": {
+   "storage": "1 TB SSD",
+   "resolution": "4K 120 Hz",
+   "ray_tracing": "yes"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0023",
+  "name": "Nexus Handheld",
+  "brand": "Nexus",
+  "category": "gaming",
+  "price_cents": 39900,
+  "stock": 23,
+  "rating": 4.3,
+  "description": "Portable PC gaming handheld.",
+  "specs": {
+   "display": "7\" 120 Hz",
+   "storage": "512 GB",
+   "battery": "3-8 h"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0024",
+  "name": "Nexus Pro Controller",
+  "brand": "Nexus",
+  "category": "gaming",
+  "price_cents": 6900,
+  "stock": 94,
+  "rating": 3.9,
+  "description": "Wireless controller with hall-effect sticks.",
+  "specs": {
+   "battery": "40 h",
+   "connectivity": "BT / 2.4 GHz / USB-C"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0025",
+  "name": "Keyforge Mechanical Keyboard",
+  "brand": "Keyforge",
+  "category": "gaming",
+  "price_cents": 12900,
+  "stock": 102,
+  "rating": 4.3,
+  "description": "Hot-swappable 75% mechanical keyboard.",
+  "specs": {
+   "switches": "linear, hot-swap",
+   "layout": "75%",
+   "rgb": "yes"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0026",
+  "name": "Ampere 65W GaN Charger",
+  "brand": "Ampere",
+  "category": "accessories",
+  "price_cents": 4900,
+  "stock": 114,
+  "rating": 4.0,
+  "description": "Tiny 3-port fast charger for laptops and phones.",
+  "specs": {
+   "output": "65 W",
+   "ports": "2x USB-C, 1x USB-A"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0027",
+  "name": "Ampere 20000 mAh Power Bank",
+  "brand": "Ampere",
+  "category": "accessories",
+  "price_cents": 5900,
+  "stock": 89,
+  "rating": 4.8,
+  "description": "Charges a phone 4 times, laptop once.",
+  "specs": {
+   "capacity": "20000 mAh",
+   "output": "45 W PD"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0028",
+  "name": "Ampere USB-C Hub 8-in-1",
+  "brand": "Ampere",
+  "category": "accessories",
+  "price_cents": 6900,
+  "stock": 61,
+  "rating": 4.0,
+  "description": "HDMI 4K, SD card, Ethernet and more.",
+  "specs": {
+   "ports": "HDMI, 3x USB-A, USB-C PD, SD, microSD, RJ45"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0029",
+  "name": "Glide Wireless Mouse",
+  "brand": "Glide",
+  "category": "accessories",
+  "price_cents": 3900,
+  "stock": 116,
+  "rating": 3.8,
+  "description": "Silent ergonomic mouse, 70-day battery.",
+  "specs": {
+   "dpi": "4000",
+   "battery": "70 days",
+   "connectivity": "BT / USB receiver"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0030",
+  "name": "Hearth Smart Speaker",
+  "brand": "Hearth",
+  "category": "smart-home",
+  "price_cents": 9900,
+  "stock": 114,
+  "rating": 3.9,
+  "description": "Voice assistant speaker with room-filling sound.",
+  "specs": {
+   "assistant": "built-in",
+   "matter": "yes"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0031",
+  "name": "Hearth Video Doorbell",
+  "brand": "Hearth",
+  "category": "smart-home",
+  "price_cents": 14900,
+  "stock": 88,
+  "rating": 4.0,
+  "description": "2K video doorbell with package detection.",
+  "specs": {
+   "video": "2K HDR",
+   "power": "battery or wired",
+   "storage": "cloud/local"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0032",
+  "name": "Hearth Smart Plug (4-pack)",
+  "brand": "Hearth",
+  "category": "smart-home",
+  "price_cents": 3900,
+  "stock": 78,
+  "rating": 4.7,
+  "description": "Schedule and control any outlet.",
+  "specs": {
+   "matter": "yes",
+   "energy_monitoring": "yes"
+  },
+  "warranty_months": 12
+ },
+ {
+  "product_id": "NB-0033",
+  "name": "Voltix Tab 11",
+  "brand": "Voltix",
+  "category": "tablets",
+  "price_cents": 59900,
+  "stock": 108,
+  "rating": 4.2,
+  "description": "11\" tablet with stylus support.",
+  "specs": {
+   "display": "11\" 120 Hz",
+   "storage": "128 GB",
+   "stylus": "supported"
+  },
+  "warranty_months": 24
+ },
+ {
+  "product_id": "NB-0034",
+  "name": "Quantix Tab Lite",
+  "brand": "Quantix",
+  "category": "tablets",
+  "price_cents": 19900,
+  "stock": 92,
+  "rating": 4.9,
+  "description": "Budget tablet for streaming and reading.",
+  "specs": {
+   "display": "10.1\" FHD",
+   "storage": "64 GB"
+  },
+  "warranty_months": 12
+ }
+]

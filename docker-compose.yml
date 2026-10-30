@@ -1,0 +1,138 @@
+# NeonByte local stack: 5 microservices + 5 agents + Jaeger, instrumented the same
+# way as on AWS (ADOT Python auto-instrumentation injected by an init container).
+#
+#   docker compose up --build                      # app + agents, traces in Jaeger
+#   docker compose --profile load up --build       # ...plus the traffic generator
+#   docker compose -f docker-compose.yml -f docker-compose.cloudwatch.yml up --build
+#                                                  # send agent telemetry to CloudWatch instead
+#
+# Only two ports are published, both on loopback: storefront :8080 and Jaeger UI :16686.
+# Agents call Amazon Bedrock, so export AWS credentials first (see README).
+
+x-adot-python: &adot-python
+  PYTHONPATH: /otel-auto-instrumentation-python/opentelemetry/instrumentation/auto_instrumentation:/app:/otel-auto-instrumentation-python
+  OTEL_PYTHON_DISTRO: aws_distro
+  OTEL_PYTHON_CONFIGURATOR: aws_configurator
+  OTEL_AWS_APPLICATION_SIGNALS_ENABLED: "false"  # no CloudWatch agent locally
+  OTEL_TRACES_SAMPLER: always_on
+  OTEL_PROPAGATORS: tracecontext,baggage,xray
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://jaeger:4318/v1/traces
+  OTEL_METRICS_EXPORTER: none
+  OTEL_LOGS_EXPORTER: none
+  OTEL_PYTHON_LOG_CORRELATION: "true"
+
+x-service-env: &service-env
+  <<: *adot-python
+  DISABLE_SSM: "true"
+  CATALOG_URL: http://catalog:8080
+  CART_URL: http://cart:8080
+  ORDERS_URL: http://orders:8080
+  PAYMENTS_URL: http://payments:8080
+
+x-service: &service
+  build: { context: ./services }
+  volumes: [adot-python:/otel-auto-instrumentation-python:ro]
+  depends_on:
+    adot-init: { condition: service_completed_successfully }
+    jaeger: { condition: service_started }
+
+x-agent-env: &agent-env
+  DISABLE_SSM: "true"
+  AWS_REGION: ${AWS_REGION:-us-east-1}
+  AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+  AWS_PROFILE: ${AWS_PROFILE:-}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+  CATALOG_URL: http://catalog:8080
+  CART_URL: http://cart:8080
+  ORDERS_URL: http://orders:8080
+  OTEL_TRACES_SAMPLER: always_on
+  OTEL_PROPAGATORS: tracecontext,baggage,xray
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://jaeger:4318/v1/traces
+  OTEL_METRICS_EXPORTER: none
+  OTEL_LOGS_EXPORTER: none
+  OTEL_AWS_APPLICATION_SIGNALS_ENABLED: "false"
+  OTEL_PYTHON_EXCLUDED_URLS: /ping
+
+x-agent: &agent
+  volumes: ["${HOME}/.aws:/home/bedrock_agentcore/.aws:ro"]
+  depends_on: [jaeger]
+
+services:
+  adot-init:
+    image: public.ecr.aws/aws-observability/adot-autoinstrumentation-python:v0.12.2
+    command: ["cp", "-a", "/autoinstrumentation/.", "/otel-auto-instrumentation-python"]
+    volumes: [adot-python:/otel-auto-instrumentation-python]
+
+  jaeger:
+    image: public.ecr.aws/docker/library/jaegertracing/all-in-one:1.62.0
+    environment: { COLLECTOR_OTLP_ENABLED: "true" }
+    ports: ["127.0.0.1:16686:16686"]
+
+  catalog:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: catalog } }
+    environment: { <<: *service-env, OTEL_RESOURCE_ATTRIBUTES: "service.name=catalog,service.namespace=neonbyte,deployment.environment=local" }
+  cart:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: cart } }
+    environment: { <<: *service-env, OTEL_RESOURCE_ATTRIBUTES: "service.name=cart,service.namespace=neonbyte,deployment.environment=local" }
+  orders:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: orders } }
+    environment: { <<: *service-env, OTEL_RESOURCE_ATTRIBUTES: "service.name=orders,service.namespace=neonbyte,deployment.environment=local" }
+  payments:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: payments } }
+    environment: { <<: *service-env, DECLINE_RATE: "0.03", OTEL_RESOURCE_ATTRIBUTES: "service.name=payments,service.namespace=neonbyte,deployment.environment=local" }
+  storefront:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: storefront } }
+    environment:
+      <<: *service-env
+      ORCHESTRATOR_URL: http://orchestrator:8080
+      OTEL_RESOURCE_ATTRIBUTES: "service.name=storefront,service.namespace=neonbyte,deployment.environment=local"
+    ports: ["127.0.0.1:8080:8080"]
+
+  orchestrator:
+    <<: *agent
+    build: { context: ./agents, dockerfile: deploy/Dockerfile, args: { AGENT: orchestrator } }
+    environment:
+      <<: *agent-env
+      AGENT_TRANSPORT: http
+      ADVISOR_AGENT_URL: http://advisor:8080
+      ORDERDESK_AGENT_URL: http://orderdesk:8080
+      SUPPORT_AGENT_URL: http://support:8080
+      CONCIERGE_AGENT_URL: http://concierge:8080
+      OTEL_RESOURCE_ATTRIBUTES: service.name=NeonByteOrchestrator,deployment.environment=local
+  advisor:
+    <<: *agent
+    build: { context: ./agents, dockerfile: deploy/Dockerfile, args: { AGENT: advisor } }
+    environment: { <<: *agent-env, OTEL_RESOURCE_ATTRIBUTES: "service.name=NeonByteAdvisor,deployment.environment=local" }
+  orderdesk:
+    <<: *agent
+    build: { context: ./agents, dockerfile: deploy/Dockerfile, args: { AGENT: orderdesk } }
+    environment: { <<: *agent-env, OTEL_RESOURCE_ATTRIBUTES: "service.name=NeonByteOrderDesk,deployment.environment=local" }
+  support:
+    <<: *agent
+    build: { context: ./agents, dockerfile: deploy/Dockerfile, args: { AGENT: support } }
+    environment: { <<: *agent-env, OTEL_RESOURCE_ATTRIBUTES: "service.name=NeonByteSupport,deployment.environment=local" }
+  concierge:
+    <<: *agent
+    build: { context: ./agents, dockerfile: deploy/Dockerfile, args: { AGENT: concierge } }
+    environment: { <<: *agent-env, OTEL_RESOURCE_ATTRIBUTES: "service.name=NeonByteConcierge,deployment.environment=local" }
+
+  loadgen:
+    profiles: [load]
+    build: { context: ./traffic }
+    environment:
+      TARGET_URL: http://storefront:8080
+      USERS: ${LOADGEN_USERS:-5}
+      CHAT_PROBABILITY: ${LOADGEN_CHAT_PROBABILITY:-0.1}
+    depends_on: [storefront]
+
+volumes:
+  adot-python:

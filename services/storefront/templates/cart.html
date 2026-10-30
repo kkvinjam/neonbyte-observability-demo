@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Your cart</h1>
+{% if cart['items'] %}
+<table class="lines">
+  <tr><th>Item</th><th>Qty</th><th>Price</th><th></th></tr>
+  {% for i in cart['items'] %}
+  <tr><td><a href="/product/{{ i.product_id }}">{{ icons.get(i.category, '🔋') }} {{ i.name }}</a></td><td>{{ i.quantity }}</td>
+      <td>{{ (i.price_cents * i.quantity)|money }}</td><td><button class="remove link" data-id="{{ i.product_id }}">Remove</button></td></tr>
+  {% endfor %}
+  <tr class="total"><td>Total</td><td>{{ cart.item_count }}</td><td>{{ cart.total_cents|money }}</td><td></td></tr>
+</table>
+<a class="btn" href="/checkout">Proceed to checkout →</a>
+{% else %}
+<p>Your cart is empty. <a href="/">Keep shopping</a>.</p>
+{% endif %}
+{% endblock %}

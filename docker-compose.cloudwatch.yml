@@ -1,0 +1,43 @@
+# Override: send the locally running agents' traces and logs to Amazon CloudWatch
+# (X-Ray Transaction Search + CloudWatch Logs + GenAI Observability) instead of Jaeger.
+# This is the ADOT setup AWS documents for agents hosted outside AgentCore Runtime.
+#
+# Prerequisites (once per account/region): CloudWatch Transaction Search enabled
+# (the NeonByte stack does this) and the log group below:
+#   aws logs create-log-group --log-group-name /neonbyte/local/agents
+#
+#   docker compose -f docker-compose.yml -f docker-compose.cloudwatch.yml up --build
+
+x-cloudwatch: &cloudwatch
+  AGENT_OBSERVABILITY_ENABLED: "true"
+  OTEL_PYTHON_DISTRO: aws_distro
+  OTEL_PYTHON_CONFIGURATOR: aws_configurator
+  OTEL_TRACES_EXPORTER: otlp
+  OTEL_LOGS_EXPORTER: otlp
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: https://xray.${AWS_REGION:-us-east-1}.amazonaws.com/v1/traces
+  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: https://logs.${AWS_REGION:-us-east-1}.amazonaws.com/v1/logs
+  OTEL_EXPORTER_OTLP_LOGS_HEADERS: x-aws-log-group=/neonbyte/local/agents,x-aws-log-stream=default,x-aws-metric-namespace=bedrock-agentcore
+  OTEL_TRACES_SAMPLER: always_on
+
+services:
+  orchestrator:
+    environment:
+      <<: *cloudwatch
+      OTEL_RESOURCE_ATTRIBUTES: service.name=NeonByteOrchestrator-local,service.namespace=neonbyte,deployment.environment=local,aws.log.group.names=/neonbyte/local/agents
+  advisor:
+    environment:
+      <<: *cloudwatch
+      OTEL_RESOURCE_ATTRIBUTES: service.name=NeonByteAdvisor-local,service.namespace=neonbyte,deployment.environment=local,aws.log.group.names=/neonbyte/local/agents
+  orderdesk:
+    environment:
+      <<: *cloudwatch
+      OTEL_RESOURCE_ATTRIBUTES: service.name=NeonByteOrderDesk-local,service.namespace=neonbyte,deployment.environment=local,aws.log.group.names=/neonbyte/local/agents
+  support:
+    environment:
+      <<: *cloudwatch
+      OTEL_RESOURCE_ATTRIBUTES: service.name=NeonByteSupport-local,service.namespace=neonbyte,deployment.environment=local,aws.log.group.names=/neonbyte/local/agents
+  concierge:
+    environment:
+      <<: *cloudwatch
+      OTEL_RESOURCE_ATTRIBUTES: service.name=NeonByteConcierge-local,service.namespace=neonbyte,deployment.environment=local,aws.log.group.names=/neonbyte/local/agents

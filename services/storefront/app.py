@@ -1,0 +1,183 @@
+"""Storefront - the NeonByte web UI plus the JSON API the browser (and the load
+generator) call. Every API route fans out to the backend microservices, so one
+page view produces a multi-hop trace in X-Ray / Application Signals."""
+
+from __future__ import annotations
+
+import logging
+import re
+from pathlib import Path
+
+from fastapi import HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
+
+from common.app_factory import create_app
+from common.config import service_url
+from common.http import client
+from storefront import assistant
+from common.users import DEFAULT_USER, DEMO_USERS, shipping_for
+
+logger = logging.getLogger("storefront")
+app = create_app("storefront", "NeonByte Storefront")
+_HERE = Path(__file__).parent
+app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
+templates = Jinja2Templates(directory=_HERE / "templates")
+_USER_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+
+CATEGORY_ICONS = {
+    "laptops": "💻", "smartphones": "📱", "audio": "🎧", "tvs": "📺", "wearables": "⌚",
+    "cameras": "📷", "gaming": "🎮", "accessories": "🔌", "smart-home": "🏠", "tablets": "📲",
+}
+templates.env.globals.update(icons=CATEGORY_ICONS, users=DEMO_USERS)
+templates.env.filters["money"] = lambda cents: f"${cents / 100:,.2f}"
+
+
+def current_user(request: Request) -> str:
+    """Shopper id from ``X-User-Id`` (load generator), ``?user=`` or the ``nb_user`` cookie."""
+    candidate = (
+        request.headers.get("x-user-id")
+        or request.query_params.get("user")
+        or request.cookies.get("nb_user")
+        or DEFAULT_USER
+    )
+    return candidate if _USER_RE.match(candidate) else DEFAULT_USER
+
+
+def _backend(method: str, url: str, **kwargs):
+    """Call a backend and translate its errors into the same status for the browser."""
+    resp = client.request(method, url, **kwargs)
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json().get("detail") or resp.json().get("error")
+        except ValueError:
+            detail = resp.text[:200]
+        raise HTTPException(resp.status_code, detail)
+    return resp.json()
+
+
+def _render(request: Request, template: str, **ctx) -> HTMLResponse:
+    user = current_user(request)
+    cart = _backend("GET", f"{service_url('CART_URL')}/carts/{user}")
+    response = templates.TemplateResponse(
+        request, template, {"user_id": user, "user": shipping_for(user), "cart_count": cart["item_count"], **ctx}
+    )
+    if request.query_params.get("user") and _USER_RE.match(request.query_params["user"]):
+        response.set_cookie("nb_user", request.query_params["user"], samesite="lax")
+    return response
+
+
+# --------------------------------------------------------------------------- pages
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request, category: str | None = None, q: str | None = None):
+    params = {k: v for k, v in {"category": category, "q": q}.items() if v}
+    products = _backend("GET", f"{service_url('CATALOG_URL')}/products", params=params)
+    categories = _backend("GET", f"{service_url('CATALOG_URL')}/categories")
+    return _render(request, "home.html", products=products, categories=categories, category=category, q=q or "")
+
+
+@app.get("/product/{product_id}", response_class=HTMLResponse)
+def product_page(request: Request, product_id: str):
+    product = _backend("GET", f"{service_url('CATALOG_URL')}/products/{product_id}")
+    return _render(request, "product.html", product=product)
+
+
+@app.get("/cart", response_class=HTMLResponse)
+def cart_page(request: Request):
+    cart = _backend("GET", f"{service_url('CART_URL')}/carts/{current_user(request)}")
+    return _render(request, "cart.html", cart=cart)
+
+
+@app.get("/checkout", response_class=HTMLResponse)
+def checkout_page(request: Request):
+    cart = _backend("GET", f"{service_url('CART_URL')}/carts/{current_user(request)}")
+    return _render(request, "checkout.html", cart=cart)
+
+
+@app.get("/orders", response_class=HTMLResponse)
+def orders_page(request: Request):
+    orders = _backend("GET", f"{service_url('ORDERS_URL')}/orders/{current_user(request)}")
+    return _render(request, "orders.html", orders=orders)
+
+
+# --------------------------------------------------------------------------- JSON API
+class AddItem(BaseModel):
+    product_id: str
+    quantity: int = Field(1, ge=1, le=20)
+
+
+class CheckoutBody(BaseModel):
+    shipping: dict | None = None
+    card_last4: str = "4242"
+
+
+class ChatBody(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+    session: str | None = Field(None, pattern=r"^[A-Za-z0-9-]{1,64}$")
+
+
+class ReturnBody(BaseModel):
+    reason: str = Field("changed my mind", max_length=500)
+
+
+@app.get("/api/me")
+def me(request: Request) -> dict:
+    user = current_user(request)
+    return {"user_id": user, **shipping_for(user)}
+
+
+@app.get("/api/products")
+def api_products(category: str | None = None, q: str | None = None) -> list[dict]:
+    params = {k: v for k, v in {"category": category, "q": q}.items() if v}
+    return _backend("GET", f"{service_url('CATALOG_URL')}/products", params=params)
+
+
+@app.get("/api/products/{product_id}")
+def api_product(product_id: str) -> dict:
+    return _backend("GET", f"{service_url('CATALOG_URL')}/products/{product_id}")
+
+
+@app.get("/api/cart")
+def api_cart(request: Request) -> dict:
+    return _backend("GET", f"{service_url('CART_URL')}/carts/{current_user(request)}")
+
+
+@app.post("/api/cart/items")
+def api_add_to_cart(request: Request, body: AddItem) -> dict:
+    return _backend("POST", f"{service_url('CART_URL')}/carts/{current_user(request)}/items", json=body.model_dump())
+
+
+@app.delete("/api/cart/items/{product_id}")
+def api_remove_from_cart(request: Request, product_id: str) -> dict:
+    return _backend("DELETE", f"{service_url('CART_URL')}/carts/{current_user(request)}/items/{product_id}")
+
+
+@app.post("/api/checkout")
+def api_checkout(request: Request, body: CheckoutBody) -> dict:
+    user = current_user(request)
+    payload = {"user_id": user, "shipping": body.shipping or shipping_for(user), "card_last4": body.card_last4}
+    return _backend("POST", f"{service_url('ORDERS_URL')}/orders/checkout", json=payload)
+
+
+@app.get("/api/orders")
+def api_orders(request: Request) -> list[dict]:
+    return _backend("GET", f"{service_url('ORDERS_URL')}/orders/{current_user(request)}")
+
+
+@app.post("/api/orders/{order_id}/return")
+def api_return(request: Request, order_id: str, body: ReturnBody) -> dict:
+    return _backend(
+        "POST", f"{service_url('ORDERS_URL')}/orders/{current_user(request)}/{order_id}/return", json=body.model_dump()
+    )
+
+
+@app.post("/api/assistant/chat")
+def api_chat(request: Request, body: ChatBody):
+    user = current_user(request)
+    try:
+        return assistant.ask(body.message, user, body.session)
+    except Exception as exc:  # noqa: BLE001 - surface agent failures as 502, keep the page alive
+        logger.exception("assistant call failed", extra={"user_id": user})
+        return JSONResponse({"error": f"assistant unavailable: {type(exc).__name__}"}, status_code=502)
