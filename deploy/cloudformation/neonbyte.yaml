@@ -514,7 +514,7 @@ Resources:
                   if [ -n "$CFN_RESPONSE_URL" ]; then
                     export STATUS=SUCCESS
                     [ "$CODEBUILD_BUILD_SUCCEEDING" = "1" ] || [ "$MODE" = "k8s-delete" ] || export STATUS=FAILED
-                    python3 -c 'import json,os; e=os.environ; d=json.load(open("/tmp/cfn-data.json")) if os.path.exists("/tmp/cfn-data.json") else {}; print(json.dumps({"Status":e["STATUS"],"Reason":"CodeBuild "+e["CODEBUILD_BUILD_ID"],"PhysicalResourceId":e["CFN_PHYSICAL_ID"],"StackId":e["CFN_STACK_ID"],"RequestId":e["CFN_REQUEST_ID"],"LogicalResourceId":e["CFN_LOGICAL_ID"],"Data":d}))' > /tmp/cfn.json
+                    python3 -c 'import json,os; e=os.environ; d=json.load(open("/tmp/cfn-data.json")) if os.path.getsize("/tmp/cfn-data.json" if os.path.exists("/tmp/cfn-data.json") else "/dev/null") else {}; print(json.dumps({"Status":e["STATUS"],"Reason":"CodeBuild "+e["CODEBUILD_BUILD_ID"],"PhysicalResourceId":e["CFN_PHYSICAL_ID"],"StackId":e["CFN_STACK_ID"],"RequestId":e["CFN_REQUEST_ID"],"LogicalResourceId":e["CFN_LOGICAL_ID"],"Data":d}))' > /tmp/cfn.json
                     curl -sS -X PUT -H 'Content-Type:' --data-binary @/tmp/cfn.json "$CFN_RESPONSE_URL"
                   fi
   # Create/Update starts a build; the stack waits (up to an hour) for CodeBuild to report back.

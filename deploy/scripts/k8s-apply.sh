@@ -15,7 +15,7 @@ if ! command -v kubectl >/dev/null; then
 fi
 aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION" >/dev/null
 
-diagnose() {  # runs on any failure so the CodeBuild log says *why*
+diagnose() (  # runs on any failure so the CodeBuild log says *why*; subshell so `set +e` can't leak
   set +e
   echo "================ DIAGNOSTICS (failed at line $1) ================"
   kubectl get nodes -o wide; kubectl get nodeclaims,nodepools 2>/dev/null
@@ -30,8 +30,8 @@ diagnose() {  # runs on any failure so the CodeBuild log says *why*
   done
   kubectl -n amazon-cloudwatch get pods -o wide; kubectl -n amazon-cloudwatch get deploy
   echo "================================================================="
-}
-trap 'diagnose $LINENO' ERR
+)
+trap 'diagnose $LINENO; exit 1' ERR
 
 # The CloudWatch operator only instruments pods created after its webhook is up.
 kubectl -n amazon-cloudwatch wait --for=condition=Available deployment --all --timeout=15m
@@ -67,7 +67,8 @@ PUBLIC_DNS="$(hostname_of storefront)"
 INTERNAL_DNS="$(hostname_of backends)"
 PUBLIC_ARN="$(aws elbv2 describe-load-balancers --query "LoadBalancers[?DNSName=='${PUBLIC_DNS}'].LoadBalancerArn" --output text)"
 
-python3 - "$PUBLIC_DNS" "$INTERNAL_DNS" "$PUBLIC_ARN" > /tmp/cfn-data.json <<'PY'
+[[ -n "$PUBLIC_DNS" && -n "$INTERNAL_DNS" && "$PUBLIC_ARN" == arn:* ]] || { echo "missing ALB data" >&2; exit 1; }
+python3 - "$PUBLIC_DNS" "$INTERNAL_DNS" "$PUBLIC_ARN" > /tmp/cfn-data.tmp <<'PY'
 import json, sys
 public_dns, internal_dns, public_arn = sys.argv[1:4]
 print(json.dumps({
@@ -76,4 +77,5 @@ print(json.dumps({
     "InternalAlbDns": internal_dns,
 }))
 PY
+mv /tmp/cfn-data.tmp /tmp/cfn-data.json
 echo "Applied. storefront ALB: $PUBLIC_DNS · internal ALB: $INTERNAL_DNS"
