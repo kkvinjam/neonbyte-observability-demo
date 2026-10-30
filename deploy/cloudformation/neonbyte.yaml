@@ -710,11 +710,13 @@ Resources:
                 - { ContainerName: cloudwatch-agent, Condition: START }
               MountPoints: [{ SourceVolume: opentelemetry-auto-instrumentation-python, ContainerPath: /otel-auto-instrumentation-python, ReadOnly: false }]
               HealthCheck:
-                Command: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+                # Probe without ADOT: with PYTHONPATH -> sitecustomize, every python process would load the
+                # instrumentation and spend ~30 s flushing exporters on exit, failing the health check.
+                Command: [CMD-SHELL, "PYTHONPATH= OTEL_SDK_DISABLED=true python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)\" || exit 1"]
                 Interval: 15
                 Timeout: 5
                 Retries: 3
-                StartPeriod: 30
+                StartPeriod: 60
               Environment:
                 - { Name: AWS_REGION, Value: !Ref "AWS::Region" }
                 - { Name: PARAMETER_STORE_PREFIX, Value: /neonbyte }
