@@ -7,3 +7,4 @@ agents/.env
 local/logs/
 *.zip
 .DS_Store
+aws.env

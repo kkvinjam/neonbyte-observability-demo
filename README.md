@@ -86,10 +86,54 @@ traffic/loadgen.py         traffic generator (local CLI and EKS deployment)
 deploy/cloudformation/     neonbyte.yaml — the whole application in one template
 deploy/k8s/render.py       renders the Kubernetes manifests (Deployments, Services, Ingresses, NodePool)
 deploy/scripts/            deploy.sh · destroy.sh · build-images.sh · k8s-apply.sh · chaos.sh
-local/run-local.sh         run everything as local processes
+local/                     setup.sh/.ps1 (prerequisites), run-agent.sh/.ps1 (one agent), ask.py (client),
+                           Dockerfile (all-in-one local image), run-local.sh (whole store as processes)
 docker-compose*.yml        run everything in containers (Jaeger, or CloudWatch for agents)
 tests/                     in-process end-to-end tests + template checks
 ```
+
+## Run an agent on any machine (no microservices, no AWS stack)
+
+Each agent runs on its own. With `NEONBYTE_BACKEND=embedded` (the launcher's default), the real
+catalog, cart, orders and payments code runs **inside the agent process** with in-memory data. The only external
+dependency is Amazon Bedrock, so you need AWS credentials with model access.
+
+**macOS / Linux / Windows (WSL or Git Bash)**. The only prerequisites are a shell and `curl`. The setup script installs
+[uv](https://docs.astral.sh/uv/), which downloads a private Python 3.13. Nothing is installed globally.
+
+```bash
+local/setup.sh                                  # once: uv + Python 3.13 + .venv with every dependency
+export AWS_PROFILE=my-profile AWS_REGION=us-east-1   # or AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN
+local/run-agent.sh orchestrator                 # or advisor | orderdesk | support | concierge
+.venv/bin/python local/ask.py "Recommend earbuds under \$300 and add them to my cart"   # another terminal
+.venv/bin/python local/ask.py                   # interactive chat (keeps one session)
+```
+
+**Windows PowerShell**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File local\setup.ps1
+$env:AWS_PROFILE="my-profile"; $env:AWS_REGION="us-east-1"
+powershell -File local\run-agent.ps1 orchestrator
+.venv\Scripts\python local\ask.py "What's your return policy?"
+```
+
+**Any machine with Docker / Podman / Finch.** One self-contained image holds every agent plus the embedded services:
+
+```bash
+docker build -f local/Dockerfile -t neonbyte-local .
+aws configure export-credentials --format env-no-export > aws.env   # temporary credentials file (delete when done)
+docker run --rm -p 127.0.0.1:8090:8090 --env-file aws.env -e AWS_REGION=us-east-1 neonbyte-local
+docker run --rm -p 127.0.0.1:8091:8091 --env-file aws.env -e AGENT=advisor neonbyte-local    # a single sub-agent
+```
+
+How the launchers behave:
+* The orchestrator runs with `AGENT_TRANSPORT=local`, so the four sub-agents run in the same process.
+* `DISABLE_SSM=true` keeps a deployed stack's `/neonbyte/*` parameters in your account from redirecting the agent to
+  AWS-internal endpoints. It also turns AgentCore Memory and the Guardrail off locally.
+* Agents listen on `127.0.0.1` only (ports: orchestrator 8090, advisor 8091, orderdesk 8092, support 8093, concierge 8094).
+* `local/run-agent.sh orchestrator --services` uses real HTTP microservices started by
+  `local/run-local.sh --no-agents` instead of the embedded ones.
 
 ## Run locally
 

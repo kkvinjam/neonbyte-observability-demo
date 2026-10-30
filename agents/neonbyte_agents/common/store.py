@@ -3,10 +3,18 @@
 Calls go through ``httpx`` so ADOT auto-instrumentation records each tool call as
 a CLIENT span to catalog / cart / orders — the agent -> microservice edges in the
 Application Signals map. Errors come back as ``{"error": ...}`` dicts the LLM can read.
+
+``NEONBYTE_BACKEND=embedded`` runs the real microservices in-process instead
+(in-memory data, see services/common/embedded.py), so an agent can run with no
+other servers — handy on a laptop or in the all-in-one local container.
 """
 
 from __future__ import annotations
 
+import functools
+import os
+import sys
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -14,14 +22,32 @@ import httpx
 from neonbyte_agents.common import config
 
 _client = httpx.Client(timeout=config.HTTP_TIMEOUT)
+EMBEDDED = os.getenv("NEONBYTE_BACKEND", "http").lower() == "embedded"
+
+
+@functools.cache
+def _embedded():
+    # services/ sits next to agents/ in the repo (and in the local container image).
+    services_dir = os.getenv("NEONBYTE_SERVICES_DIR") or str(Path(__file__).resolve().parents[3] / "services")
+    if services_dir not in sys.path:
+        sys.path.insert(0, services_dir)
+    from common.embedded import mesh  # services' `common` package, not neonbyte_agents.common
+
+    return mesh()
 
 
 def _call(method: str, key: str, path: str, **kwargs: Any) -> Any:
-    url = f"{config.backend_url(key)}{path}"
-    try:
-        resp = _client.request(method, url, **kwargs)
-    except httpx.HTTPError as exc:
-        return {"error": f"{key} unreachable: {exc}"}
+    if EMBEDDED:
+        try:
+            resp = _embedded().apps[key].request(method, path, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - surface to the LLM like a network error
+            return {"error": f"{key} (embedded) failed: {exc}"}
+    else:
+        url = f"{config.backend_url(key)}{path}"
+        try:
+            resp = _client.request(method, url, **kwargs)
+        except httpx.HTTPError as exc:
+            return {"error": f"{key} unreachable: {exc}"}
     if resp.status_code >= 400:
         try:
             detail = resp.json().get("detail") or resp.text

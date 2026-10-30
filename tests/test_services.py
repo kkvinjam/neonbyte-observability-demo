@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import pytest
 
@@ -18,32 +17,13 @@ os.environ.update(DISABLE_SSM="true", DECLINE_RATE="0")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from common.embedded import Router  # noqa: E402
+
 from cart import app as cart_mod  # noqa: E402
 from catalog import app as catalog_mod  # noqa: E402
 from orders import app as orders_mod  # noqa: E402
 from payments import app as payments_mod  # noqa: E402
 from storefront import app as storefront_mod  # noqa: E402
-
-
-class Router:
-    """Quacks like httpx.Client; routes by port to the matching TestClient."""
-
-    def __init__(self, apps: dict[int, TestClient]):
-        self.apps = apps
-
-    def request(self, method, url, **kwargs):
-        parts = urlsplit(url)
-        kwargs.pop("timeout", None)
-        return self.apps[parts.port].request(method, parts.path + (f"?{parts.query}" if parts.query else ""), **kwargs)
-
-    def get(self, url, **kw):
-        return self.request("GET", url, **kw)
-
-    def post(self, url, **kw):
-        return self.request("POST", url, **kw)
-
-    def delete(self, url, **kw):
-        return self.request("DELETE", url, **kw)
 
 
 @pytest.fixture(scope="module")
@@ -54,9 +34,10 @@ def store():
         8083: TestClient(orders_mod.app),
         8084: TestClient(payments_mod.app),
     }
+    by_key = {"CATALOG_URL": apps[8081], "CART_URL": apps[8082], "ORDERS_URL": apps[8083], "PAYMENTS_URL": apps[8084]}
     for client in apps.values():
         client.__enter__()  # run startup hooks (catalog seeding)
-    router = Router(apps)
+    router = Router(by_key)
     for mod in (cart_mod, orders_mod, storefront_mod):
         mod.client = router
     with TestClient(storefront_mod.app) as front:
