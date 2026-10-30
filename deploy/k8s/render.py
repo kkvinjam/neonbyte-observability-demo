@@ -126,7 +126,8 @@ def ingress(name: str, cls: str, security_group: str, rules: list[tuple[str, str
                 "alb.ingress.kubernetes.io/security-groups": security_group,
                 "alb.ingress.kubernetes.io/manage-backend-security-group-rules": "false",
                 "alb.ingress.kubernetes.io/load-balancer-attributes": attrs,
-                "alb.ingress.kubernetes.io/tags": "app:project=neonbyte",
+                # No custom `alb.ingress.kubernetes.io/tags`: EKS Auto Mode's managed
+                # AmazonEKSLoadBalancingPolicy only allows its own tag keys on ELB create calls.
             },
         },
         "spec": {
