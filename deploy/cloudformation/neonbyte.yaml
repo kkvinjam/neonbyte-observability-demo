@@ -1147,6 +1147,9 @@ Resources:
             # AgentCore observability: ADOT exports spans/logs straight to CloudWatch (no collector)
             OTEL_PYTHON_EXCLUDED_URLS: /ping
             AGENT_OBSERVABILITY_ENABLED: "true"
+            # Trace every agent request: chats are low-volume, and inheriting the incoming (mostly
+            # unsampled) decision drops all GenAI spans while only the runtime's own Invoke span remains.
+            OTEL_TRACES_SAMPLER: always_on
             AWS_AGENTIC_INSTRUMENTATION_OPT_IN: "true"
             AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT: "true"
             UNIFIED_TRACES_DESTINATION_ENABLED: "true"
