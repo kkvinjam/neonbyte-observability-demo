@@ -22,7 +22,7 @@
   </form>
   <aside class="panel">
     <h2>Summary</h2>
-    {% for i in cart['items'] %}<div class="row"><span>{{ i.quantity }} × {{ i.name }}</span><span>{{ (i.price_cents * i.quantity)|money }}</span></div>{% endfor %}
+    {% for i in cart['items'] %}<div class="row"><span class="line-item">{% if i.product_id in images %}<img class="mini" src="/static/products/{{ i.product_id }}.webp" alt="" width="36" height="36">{% endif %}{{ i.quantity }} × {{ i.name }}</span><span>{{ (i.price_cents * i.quantity)|money }}</span></div>{% endfor %}
     <div class="row total"><span>Total</span><span>{{ cart.total_cents|money }}</span></div>
   </aside>
 </div>

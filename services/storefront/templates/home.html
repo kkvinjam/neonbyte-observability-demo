@@ -14,7 +14,7 @@
 <div class="grid">
   {% for p in products %}
   <article class="card">
-    <a href="/product/{{ p.product_id }}" class="thumb" data-cat="{{ p.category }}">{{ icons.get(p.category, '🔋') }}</a>
+    <a href="/product/{{ p.product_id }}" class="thumb" data-cat="{{ p.category }}">{% if p.product_id in images %}<img src="/static/products/{{ p.product_id }}.webp" alt="{{ p.name }}" loading="lazy" width="640" height="640">{% else %}{{ icons.get(p.category, '🔋') }}{% endif %}</a>
     <div class="card-body">
       <div class="brand">{{ p.brand }}</div>
       <a href="/product/{{ p.product_id }}" class="name">{{ p.name }}</a>

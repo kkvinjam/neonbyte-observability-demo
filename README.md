@@ -84,6 +84,7 @@ agents/
     knowledge/             buying guides, policies, troubleshooting (keyword retrieval)
   deploy/                  Dockerfile (AGENT build-arg, ARM64), requirements.<agent>.txt (inputs) and
                            requirements.<agent>.lock (hash-pinned, what images install; `make lock`)
+tools/generate_product_images.py  product photos via Amazon Bedrock (Stability, us-west-2) -> storefront/static/products
 traffic/loadgen.py         traffic generator (local CLI and EKS deployment)
 deploy/cloudformation/     neonbyte.yaml — the whole application in one template
 deploy/k8s/render.py       renders the Kubernetes manifests (Deployments, Services, Ingresses, NodePool)

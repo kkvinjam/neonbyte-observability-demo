@@ -124,6 +124,15 @@ button:disabled, button:disabled:hover { opacity: .45; cursor: not-allowed; tran
   border-bottom: 1px solid var(--line); transition: font-size .18s;
 }
 .card:hover .thumb { font-size: 68px; }
+/* product photos: fill the tile, gentle zoom on hover; emoji stays as the fallback */
+.thumb { overflow: hidden; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .35s ease; }
+.card .thumb:has(img) { height: 210px; }
+.card:hover .thumb img { transform: scale(1.04); }
+.thumb.big:has(img) { height: auto; aspect-ratio: 1 / 1; max-height: 520px; }
+.line-item { display: inline-flex; align-items: center; gap: 12px; }
+img.mini { width: 48px; height: 48px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); flex: none; }
+.checkout img.mini { width: 36px; height: 36px; border-radius: 8px; }
 .thumb.big { height: 360px; font-size: 150px; border-radius: var(--radius-lg); border: 1px solid var(--line); box-shadow: var(--shadow); }
 /* category tints (data-cat on the tile) */
 .thumb[data-cat="laptops"]     { --tint: 165,180,252; }

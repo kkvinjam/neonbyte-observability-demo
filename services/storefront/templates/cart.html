@@ -5,7 +5,7 @@
 <table class="lines">
   <tr><th>Item</th><th>Qty</th><th>Price</th><th></th></tr>
   {% for i in cart['items'] %}
-  <tr><td><a href="/product/{{ i.product_id }}">{{ icons.get(i.category, '🔋') }} {{ i.name }}</a></td><td>{{ i.quantity }}</td>
+  <tr><td><a href="/product/{{ i.product_id }}" class="line-item">{% if i.product_id in images %}<img class="mini" src="/static/products/{{ i.product_id }}.webp" alt="" width="48" height="48">{% else %}{{ icons.get(i.category, '🔋') }}{% endif %} {{ i.name }}</a></td><td>{{ i.quantity }}</td>
       <td>{{ (i.price_cents * i.quantity)|money }}</td><td><button class="remove link" data-id="{{ i.product_id }}">Remove</button></td></tr>
   {% endfor %}
   <tr class="total"><td>Total</td><td>{{ cart.item_count }}</td><td>{{ cart.total_cents|money }}</td><td></td></tr>

@@ -95,3 +95,17 @@ def test_chat_session_id_shown(store):
     assert body["session_id"] == f"user007-{sid}" and len(body["session_id"]) >= 33  # AgentCore minimum
     assert front.get("/api/assistant/session?session=bad%20id").status_code == 422
     assert 'id="chat-session-id"' in front.get("/").text
+
+
+def test_every_product_has_a_photo(store):
+    front, apps = store
+    import json as _json
+    from pathlib import Path as _P
+
+    root = _P(__file__).resolve().parents[1]
+    ids = {p["product_id"] for p in _json.loads((root / "services/catalog/products.json").read_text())}
+    photos = {f.stem for f in (root / "services/storefront/static/products").glob("*.webp")}
+    assert ids <= photos, f"missing photos: {sorted(ids - photos)}"
+    html = front.get("/").text
+    assert 'src="/static/products/NB-0001.webp"' in html
+    assert front.get("/static/products/NB-0009.webp").headers["content-type"] == "image/webp"

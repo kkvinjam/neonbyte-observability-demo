@@ -3,7 +3,7 @@
 {% block content %}
 <a href="/?category={{ product.category }}" class="muted">← {{ labels.get(product.category, product.category|replace('-', ' ')|title) }}</a>
 <section class="detail">
-  <div class="thumb big" data-cat="{{ product.category }}">{{ icons.get(product.category, '🔋') }}</div>
+  <div class="thumb big" data-cat="{{ product.category }}">{% if product.product_id in images %}<img src="/static/products/{{ product.product_id }}.webp" alt="{{ product.name }}" loading="lazy" width="640" height="640">{% else %}{{ icons.get(product.category, '🔋') }}{% endif %}</div>
   <div>
     <div class="brand">{{ product.brand }}</div>
     <h1>{{ product.name }}</h1>
