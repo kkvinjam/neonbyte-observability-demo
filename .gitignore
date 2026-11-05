@@ -8,3 +8,11 @@ local/logs/
 *.zip
 .DS_Store
 aws.env
+.omni/
+.claude/
+.github/
+.cursor/
+.kiro/
+.agents/
+.env.omni
+.omni/collector.json

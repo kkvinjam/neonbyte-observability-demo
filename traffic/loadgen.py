@@ -30,7 +30,8 @@ import httpx
 
 CATEGORIES = ["laptops", "smartphones", "audio", "tvs", "wearables", "cameras", "gaming", "accessories", "smart-home", "tablets"]
 SEARCHES = ["oled", "noise cancelling", "gaming", "charger", "4k", "watch", "wireless", "drone", "chromebook", "soundbar"]
-DEMO_USERS = [f"user{i:03d}" for i in range(1, 11)]
+DEMO_USERS = [f"user{i:03d}" for i in range(1, 11)]  # the storefront's demo profiles — left alone by default
+LOADGEN_USERS = [f"lg-shopper-{i:02d}" for i in range(50)]  # dedicated synthetic shoppers
 
 # Prompts chosen to hit every sub-agent through the orchestrator.
 CHAT_PROMPTS = [
@@ -82,8 +83,9 @@ class Stats:
 
 class Shopper:
     def __init__(self, idx: int, client: httpx.AsyncClient, stats: Stats, args: argparse.Namespace):
-        # Mostly the 10 demo profiles (pre-filled addresses), plus some anonymous guests.
-        self.user = random.choice(DEMO_USERS) if random.random() < 0.7 else f"guest-{uuid.uuid4().hex[:8]}"
+        # Synthetic shoppers by default, so the demo profiles' carts and order history stay clean
+        # for live demos; --use-demo-users shops as user001-user010 instead.
+        self.user = random.choice(DEMO_USERS if args.use_demo_users else LOADGEN_USERS)
         self.client, self.stats, self.args = client, stats, args
         self.headers = {"X-User-Id": self.user, "User-Agent": f"neonbyte-loadgen/1.0 shopper-{idx}"}
         self.chat_session = uuid.uuid4().hex
@@ -116,21 +118,27 @@ class Shopper:
             await self.call("search", "GET", "/", params={"q": random.choice(SEARCHES)})
             await self.think()
 
+        added: list[str] = []
         for product in random.sample(items, k=min(len(items), random.randint(1, 3))):
             await self.call("product_page", "GET", f"/product/{product['product_id']}")
             await self.think()
-            if random.random() < 0.6 and product.get("stock", 0) > 0:
-                await self.call("add_to_cart", "POST", "/api/cart/items", json={"product_id": product["product_id"], "quantity": random.choice([1, 1, 1, 2])})
+            if not added and random.random() < self.args.add_to_cart_probability and product.get("stock", 0) > 0:
+                resp = await self.call("add_to_cart", "POST", "/api/cart/items", json={"product_id": product["product_id"], "quantity": 1})
+                if resp is not None and resp.status_code == 200:
+                    added.append(product["product_id"])
 
         if random.random() < 0.05:  # broken bookmark -> 404 in the error charts
             await self.call("product_page", "GET", f"/product/NB-{random.randint(5000, 9999)}")
 
         await self.call("cart_page", "GET", "/cart")
-        if random.random() < self.args.checkout_probability:
+        if added and random.random() < self.args.checkout_probability:
             await self.call("checkout_page", "GET", "/checkout")
             await self.think()
             card = "0000" if random.random() < 0.05 else "4242"
             await self.call("checkout", "POST", "/api/checkout", json={"card_last4": card})
+        else:
+            for product_id in added:  # abandoned cart: put it back so carts don't pile up
+                await self.call("remove_from_cart", "DELETE", f"/api/cart/items/{product_id}")
 
         if random.random() < 0.4:
             orders = await self.call("orders_page", "GET", "/api/orders")
@@ -165,7 +173,9 @@ async def main(args: argparse.Namespace) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
 
-    print(f"NeonByte loadgen -> {args.target} | users={args.users} duration={args.duration or 'forever'}s chat_p={args.chat_probability}")
+    print(f"NeonByte loadgen -> {args.target} | users={args.users} duration={str(args.duration) + 's' if args.duration else 'forever'} "
+          f"cart_p={args.add_to_cart_probability} checkout_p={args.checkout_probability} chat_p={args.chat_probability} "
+          f"shoppers={'demo profiles' if args.use_demo_users else 'lg-shopper-NN'}")
     limits = httpx.Limits(max_connections=args.users * 4)
     async with httpx.AsyncClient(base_url=args.target, timeout=30, limits=limits, follow_redirects=True) as client:
         tasks = [asyncio.create_task(shopper_loop(i, client, stats, args, stop)) for i in range(args.users)]
@@ -208,7 +218,12 @@ def parse() -> argparse.Namespace:
     p.add_argument("--duration", type=int, default=int(env("DURATION", "0")), help="seconds to run, 0 = until stopped")
     p.add_argument("--think-min", type=float, default=float(env("THINK_MIN", "0.5")))
     p.add_argument("--think-max", type=float, default=float(env("THINK_MAX", "3")))
-    p.add_argument("--checkout-probability", type=float, default=float(env("CHECKOUT_PROBABILITY", "0.35")))
+    p.add_argument("--add-to-cart-probability", type=float, default=float(env("ADD_TO_CART_PROBABILITY", "0.3")),
+                   help="chance to add one viewed product to the cart (at most one item per journey)")
+    p.add_argument("--checkout-probability", type=float, default=float(env("CHECKOUT_PROBABILITY", "0.1")),
+                   help="chance that a journey with an item in the cart checks out (else the cart is emptied)")
+    p.add_argument("--use-demo-users", action="store_true", default=env("USE_DEMO_USERS", "") == "true",
+                   help="shop as the demo profiles user001-user010 instead of dedicated lg-shopper-NN users")
     p.add_argument("--chat-probability", type=float, default=float(env("CHAT_PROBABILITY", "0.1")),
                    help="chance per journey of an assistant chat (each one invokes several LLM calls)")
     p.add_argument("--report-every", type=int, default=int(env("REPORT_EVERY", "60")))

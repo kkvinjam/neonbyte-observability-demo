@@ -51,6 +51,24 @@ const log = document.getElementById('chat-log');
 let session = sessionStorage.getItem('nb_chat_session');
 if (!session) { session = crypto.randomUUID(); sessionStorage.setItem('nb_chat_session', session); }
 
+// Show the AgentCore runtime session id (what GenAI Observability / Transaction Search index on).
+const sessionEl = document.getElementById('chat-session-id');
+const showSession = (id) => { sessionEl.textContent = id; sessionEl.title = id; };
+const refreshSession = async () => {
+  try { showSession((await api('GET', `/api/assistant/session?session=${encodeURIComponent(session)}`)).session_id); }
+  catch { showSession(session); }
+};
+refreshSession();
+document.getElementById('chat-copy').onclick = async () => {
+  try { await navigator.clipboard.writeText(sessionEl.textContent); toast('Session id copied'); }
+  catch { toast(sessionEl.textContent); }
+};
+document.getElementById('chat-new').onclick = () => {
+  session = crypto.randomUUID(); sessionStorage.setItem('nb_chat_session', session);
+  [...log.querySelectorAll('.msg')].slice(1).forEach((m) => m.remove());  // keep the greeting
+  refreshSession(); toast('New chat session');
+};
+
 document.getElementById('chat-toggle').onclick = () => { chat.hidden = !chat.hidden; document.getElementById('chat-input').focus(); };
 document.getElementById('chat-close').onclick = () => { chat.hidden = true; };
 
@@ -72,6 +90,7 @@ document.getElementById('chat-form').addEventListener('submit', async (e) => {
   try {
     const res = await api('POST', '/api/assistant/chat', { message, session });
     pending.className = 'msg bot'; pending.innerHTML = render(res.reply || '(no reply)');
+    if (res.session_id) showSession(res.session_id);
     const cart = await api('GET', '/api/cart'); setCount(cart.item_count);
   } catch (err) { pending.className = 'msg bot'; pending.textContent = `⚠️ ${err.message}`; }
 });

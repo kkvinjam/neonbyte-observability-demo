@@ -13,6 +13,7 @@ the same idea as the [One Observability Demo](https://github.com/aws-samples/one
   traced in **CloudWatch GenAI Observability**.
 * **One CloudFormation template** deploys everything — it even builds the container images from source.
 * A **traffic generator** simulates shoppers (and assistant chats), locally or as a Kubernetes deployment.
+  It shops as dedicated `lg-shopper-NN` users, so the demo profiles' carts and orders stay clean.
 * **Fault injection** knobs (latency, errors, card declines) flip at runtime via SSM — no redeploy.
 
 ## Architecture

@@ -58,11 +58,11 @@ def ask(message: str, user_id: str, session: str | None) -> dict:
     if local_url:
         resp = client.post(f"{local_url}/invocations", json=payload, timeout=180)
         resp.raise_for_status()
-        return {"reply": _collect(resp.content, resp.headers.get("content-type", "")), "session": session}
+        return {"reply": _collect(resp.content, resp.headers.get("content-type", "")), "session": session, "session_id": payload["sessionId"]}
 
     arn = _runtime_arn()
     if not arn:
-        return {"reply": "The assistant is not configured (set ORCHESTRATOR_URL or ORCHESTRATOR_RUNTIME_ARN).", "session": session}
+        return {"reply": "The assistant is not configured (set ORCHESTRATOR_URL or ORCHESTRATOR_RUNTIME_ARN).", "session": session, "session_id": payload["sessionId"]}
 
     global _agentcore
     if _agentcore is None:
@@ -80,4 +80,4 @@ def ask(message: str, user_id: str, session: str | None) -> dict:
         accept="application/json, text/event-stream",
     )
     body = resp["response"].read()
-    return {"reply": _collect(body, resp.get("contentType", "")), "session": session}
+    return {"reply": _collect(body, resp.get("contentType", "")), "session": session, "session_id": payload["sessionId"]}

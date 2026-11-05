@@ -8,7 +8,7 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -171,6 +171,13 @@ def api_return(request: Request, order_id: str, body: ReturnBody) -> dict:
     return _backend(
         "POST", f"{service_url('ORDERS_URL')}/orders/{current_user(request)}/{order_id}/return", json=body.model_dump()
     )
+
+
+@app.get("/api/assistant/session")
+def api_chat_session(request: Request, session: str = Query(..., pattern=r"^[A-Za-z0-9-]{1,64}$")) -> dict:
+    """The AgentCore runtime session id a chat will use — shown in the chat header so demos can
+    jump straight to the session in CloudWatch GenAI Observability / Transaction Search."""
+    return {"session": session, "session_id": assistant.session_id_for(current_user(request), session)}
 
 
 @app.post("/api/assistant/chat")

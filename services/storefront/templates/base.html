@@ -29,7 +29,14 @@
 
 <button id="chat-toggle" title="Ask Sparky">💬 Ask Sparky</button>
 <section id="chat" hidden>
-  <div class="chat-head">⚡ Sparky — your NeonByte assistant <button id="chat-close">✕</button></div>
+  <div class="chat-head">
+    <div class="chat-title">⚡ Sparky — your NeonByte assistant <button id="chat-close" title="Close">✕</button></div>
+    <div class="chat-session" title="AgentCore session id — search for it in CloudWatch GenAI Observability or Transaction Search">
+      Session <code id="chat-session-id">…</code>
+      <button id="chat-copy" title="Copy session id">⧉</button>
+      <button id="chat-new" title="Start a new session">↻ New</button>
+    </div>
+  </div>
   <div id="chat-log">
     <div class="msg bot">Hi {{ user.name.split(' ')[0] }}! I can recommend gear, compare products, add things to your cart, check out, track orders or start a return.</div>
   </div>

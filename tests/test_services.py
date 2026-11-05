@@ -86,3 +86,12 @@ def test_oversell_rejected(store):
     resp = front.post("/api/cart/items", json={"product_id": "NB-0001", "quantity": 20}, headers={"X-User-Id": "x"})
     assert resp.status_code in (200, 409)
     assert front.post("/api/cart/items", json={"product_id": "NOPE"}, headers={"X-User-Id": "x"}).status_code == 404
+
+
+def test_chat_session_id_shown(store):
+    front, _ = store
+    sid = "0b1c2d3e-aaaa-bbbb-cccc-123456789abc"
+    body = front.get(f"/api/assistant/session?session={sid}", headers={"X-User-Id": "user007"}).json()
+    assert body["session_id"] == f"user007-{sid}" and len(body["session_id"]) >= 33  # AgentCore minimum
+    assert front.get("/api/assistant/session?session=bad%20id").status_code == 422
+    assert 'id="chat-session-id"' in front.get("/").text

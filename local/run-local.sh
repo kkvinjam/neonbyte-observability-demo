@@ -10,6 +10,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VENV="${VENV:-$ROOT/.venv}"
+case "$VENV" in /*) ;; *) VENV="$PWD/$VENV" ;; esac  # absolute: the servers start from other directories
 LOGS="$ROOT/local/logs"
 MODE="${1:-}"
 mkdir -p "$LOGS"
