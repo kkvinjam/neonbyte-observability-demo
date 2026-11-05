@@ -16,7 +16,7 @@ Metadata:
       - Label: { default: Models (Amazon Bedrock) }
         Parameters: [ClaudeModelId, NovaLiteModelId, LlamaModelId, GptOssModelId, EnableGuardrail]
       - Label: { default: Observability }
-        Parameters: [EnableTransactionSearch, EnableApplicationSignalsDiscovery, LogRetentionDays]
+        Parameters: [EnableTransactionSearch, EnableApplicationSignalsDiscovery, LogRetentionDays, AlarmEmail]
       - Label: { default: Capacity and traffic }
         Parameters: [ServiceDesiredCount, LoadGenDesiredCount, LoadGenUsers, LoadGenChatProbability]
 
@@ -84,6 +84,10 @@ Parameters:
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: Set false if Application Signals is already enabled in this account and region.
+  AlarmEmail:
+    Type: String
+    Default: ""
+    Description: Optional e-mail address subscribed to the NeonByte alarm topic (confirm the subscription e-mail).
   LogRetentionDays:
     Type: Number
     Default: 7
@@ -144,8 +148,46 @@ Conditions:
   GuardrailOn: !Equals [!Ref EnableGuardrail, "true"]
   TransactionSearchOn: !Equals [!Ref EnableTransactionSearch, "true"]
   DiscoveryOn: !Equals [!Ref EnableApplicationSignalsDiscovery, "true"]
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, ""]]
 
 Resources:
+  # =====================================================================================
+  # Customer-managed KMS key: DynamoDB tables, log groups, CodeBuild, EKS secrets, SNS, SQS
+  # =====================================================================================
+  DataKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: NeonByte demo data encryption key
+      EnableKeyRotation: true
+      PendingWindowInDays: 7
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AccountAdministration  # lets IAM policies in this account grant use of the key
+            Effect: Allow
+            Principal: { AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root" }
+            Action: kms:*
+            Resource: "*"
+          - Sid: CloudWatchLogsEncryption
+            Effect: Allow
+            Principal: { Service: !Sub "logs.${AWS::Region}.amazonaws.com" }
+            Action: [kms:Encrypt*, kms:Decrypt*, kms:ReEncrypt*, kms:GenerateDataKey*, kms:Describe*]
+            Resource: "*"
+            Condition:
+              ArnLike:
+                kms:EncryptionContext:aws:logs:arn: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:*"
+          - Sid: CloudWatchAlarmsPublishToEncryptedTopic
+            Effect: Allow
+            Principal: { Service: cloudwatch.amazonaws.com }
+            Action: [kms:Decrypt, kms:GenerateDataKey*]
+            Resource: "*"
+            Condition: { StringEquals: { aws:SourceAccount: !Ref "AWS::AccountId" } }
+  DataKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/neonbyte-data
+      TargetKeyId: !Ref DataKey
+
   # =====================================================================================
   # Network: 2 public + 2 private subnets, one NAT gateway, VPC flow logs to CloudWatch
   # =====================================================================================
@@ -197,6 +239,10 @@ Resources:
   PublicDefaultRoute:
     Type: AWS::EC2::Route
     DependsOn: GatewayAttachment
+    Metadata:
+      guard:
+        SuppressedRules:
+          - NO_UNRESTRICTED_ROUTE_TO_IGW  # public subnets only: internet-facing ALB + NAT gateway; private subnets use NAT
     Properties: { RouteTableId: !Ref PublicRouteTable, DestinationCidrBlock: 0.0.0.0/0, GatewayId: !Ref InternetGateway }
   PublicSubnet1Routes:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -233,7 +279,11 @@ Resources:
 
   FlowLogGroup:
     Type: AWS::Logs::LogGroup
-    Properties: { LogGroupName: /neonbyte/vpc/flowlogs, RetentionInDays: !Ref LogRetentionDays }
+    Metadata:
+      guard:
+        SuppressedRules:
+          - CW_LOGGROUP_RETENTION_PERIOD_CHECK  # RetentionInDays is set from the LogRetentionDays parameter
+    Properties: { LogGroupName: /neonbyte/vpc/flowlogs, RetentionInDays: !Ref LogRetentionDays, KmsKeyId: !GetAtt DataKey.Arn }
   FlowLogRole:
     Type: AWS::IAM::Role
     Properties:
@@ -244,16 +294,20 @@ Resources:
             Principal: { Service: vpc-flow-logs.amazonaws.com }
             Action: sts:AssumeRole
             Condition: { StringEquals: { aws:SourceAccount: !Ref "AWS::AccountId" } }
-      Policies:
-        - PolicyName: flowlogs
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: [logs:CreateLogStream, logs:PutLogEvents, logs:DescribeLogStreams]
-                Resource: !Sub ${FlowLogGroup.Arn}
+  FlowLogPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: NeonByte flowlogs permissions for FlowLogRole
+      Roles: [!Ref FlowLogRole]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [logs:CreateLogStream, logs:PutLogEvents, logs:DescribeLogStreams]
+            Resource: !Sub ${FlowLogGroup.Arn}
   FlowLog:
     Type: AWS::EC2::FlowLog
+    DependsOn: FlowLogPolicy
     Properties:
       ResourceId: !Ref Vpc
       ResourceType: VPC
@@ -323,20 +377,44 @@ Resources:
         Version: "2012-10-17"
         Statement: [{ Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }]
       ManagedPolicyArns: [!Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"]
-      Policies:
-        - PolicyName: helper
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: ec2:DescribeManagedPrefixLists
-                Resource: "*"
-              - Effect: Allow
-                Action: codebuild:StartBuild
-                Resource: !GetAtt ImageBuildProject.Arn
+  HelperPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: NeonByte helper permissions for HelperRole
+      Roles: [!Ref HelperRole]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: ec2:DescribeManagedPrefixLists
+            Resource: "*"
+          - Effect: Allow
+            Action: sqs:SendMessage
+            Resource: !GetAtt HelperDeadLetterQueue.Arn
+          - Effect: Allow  # dead-letter queue is encrypted with DataKey
+            Action: [kms:GenerateDataKey*, kms:Decrypt]
+            Resource: !GetAtt DataKey.Arn
+          - Effect: Allow
+            Action: codebuild:StartBuild
+            Resource: !GetAtt ImageBuildProject.Arn
+  HelperDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+      KmsMasterKeyId: !Ref DataKey
   HelperFunction:
     Type: AWS::Lambda::Function
+    DependsOn: HelperPolicy
+    Metadata:
+      guard:
+        SuppressedRules:
+          # Fresh event accounts often have a 10-execution concurrency quota; reserving any fails the deploy.
+          - LAMBDA_CONCURRENCY_CHECK
+          # CloudFormation custom-resource helper that only calls AWS APIs (no data access); VPC ENIs
+          # would delay stack deletion in event accounts.
+          - LAMBDA_INSIDE_VPC
     Properties:
+      DeadLetterConfig: { TargetArn: !GetAtt HelperDeadLetterQueue.Arn }
       Description: NeonByte CloudFormation helper (prefix list lookup, image build trigger)
       Runtime: python3.13
       Architectures: [arm64]
@@ -407,7 +485,11 @@ Resources:
 
   BuildLogGroup:
     Type: AWS::Logs::LogGroup
-    Properties: { LogGroupName: /neonbyte/codebuild, RetentionInDays: !Ref LogRetentionDays }
+    Metadata:
+      guard:
+        SuppressedRules:
+          - CW_LOGGROUP_RETENTION_PERIOD_CHECK  # RetentionInDays is set from the LogRetentionDays parameter
+    Properties: { LogGroupName: /neonbyte/codebuild, RetentionInDays: !Ref LogRetentionDays, KmsKeyId: !GetAtt DataKey.Arn }
   ImageBuildRole:
     Type: AWS::IAM::Role
     Properties:
@@ -418,47 +500,54 @@ Resources:
             Principal: { Service: codebuild.amazonaws.com }
             Action: sts:AssumeRole
             Condition: { StringEquals: { aws:SourceAccount: !Ref "AWS::AccountId" } }
-      Policies:
-        - PolicyName: build
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: [logs:CreateLogStream, logs:PutLogEvents]
-                Resource: !Sub ${BuildLogGroup.Arn}:*
-              - Effect: Allow
-                Action: ecr:GetAuthorizationToken
-                Resource: "*"
-              - Effect: Allow
-                Action:
-                  - ecr:BatchCheckLayerAvailability
-                  - ecr:BatchGetImage
-                  - ecr:CompleteLayerUpload
-                  - ecr:GetDownloadUrlForLayer
-                  - ecr:InitiateLayerUpload
-                  - ecr:PutImage
-                  - ecr:UploadLayerPart
-                Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/neonbyte/*
-              - Effect: Allow
-                Action: eks:DescribeCluster
-                Resource: !Sub arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/neonbyte-eks
-              - Effect: Allow
-                Action: elasticloadbalancing:DescribeLoadBalancers
-                Resource: "*"
-              - !If
-                - UseS3Source
-                - Effect: Allow
-                  Action: s3:GetObject
-                  Resource: !Sub
-                    - arn:${AWS::Partition}:s3:::${Path}
-                    - Path: !Select [1, !Split ["s3://", !Ref SourceS3Uri]]
-                - !Ref AWS::NoValue
+  ImageBuildPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: NeonByte build permissions for ImageBuildRole
+      Roles: [!Ref ImageBuildRole]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [logs:CreateLogStream, logs:PutLogEvents]
+            Resource: !Sub ${BuildLogGroup.Arn}:*
+          - Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:BatchGetImage
+              - ecr:CompleteLayerUpload
+              - ecr:GetDownloadUrlForLayer
+              - ecr:InitiateLayerUpload
+              - ecr:PutImage
+              - ecr:UploadLayerPart
+            Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/neonbyte/*
+          - Effect: Allow  # CodeBuild encrypts build output/cache with DataKey
+            Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey*, kms:ReEncrypt*, kms:DescribeKey]
+            Resource: !GetAtt DataKey.Arn
+          - Effect: Allow
+            Action: eks:DescribeCluster
+            Resource: !Sub arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/neonbyte-eks
+          - Effect: Allow
+            Action: elasticloadbalancing:DescribeLoadBalancers
+            Resource: "*"
+          - !If
+            - UseS3Source
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub
+                - arn:${AWS::Partition}:s3:::${Path}
+                - Path: !Select [1, !Split ["s3://", !Ref SourceS3Uri]]
+            - !Ref AWS::NoValue
   ImageBuildProject:
     Type: AWS::CodeBuild::Project
     Properties:
       Name: neonbyte-image-build
       Description: Builds the NeonByte images (linux/arm64) and applies the Kubernetes manifests to EKS
       ServiceRole: !GetAtt ImageBuildRole.Arn
+      EncryptionKey: !GetAtt DataKey.Arn
       TimeoutInMinutes: 50
       Artifacts: { Type: NO_ARTIFACTS }
       LogsConfig: { CloudWatchLogs: { Status: ENABLED, GroupName: !Ref BuildLogGroup } }
@@ -521,6 +610,7 @@ Resources:
   ContainerImages:
     Type: Custom::ImageBuild
     DependsOn:
+      - ImageBuildPolicy
       - Ecrstorefront
       - Ecrcatalog
       - Ecrcart
@@ -547,6 +637,8 @@ Resources:
     Properties:
       TableName: neonbyte-products
       BillingMode: PAY_PER_REQUEST
+      SSESpecification: { SSEEnabled: true, SSEType: KMS, KMSMasterKeyId: !GetAtt DataKey.Arn }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
       AttributeDefinitions: [{ AttributeName: product_id, AttributeType: S }]
       KeySchema: [{ AttributeName: product_id, KeyType: HASH }]
   CartsTable:
@@ -554,6 +646,8 @@ Resources:
     Properties:
       TableName: neonbyte-carts
       BillingMode: PAY_PER_REQUEST
+      SSESpecification: { SSEEnabled: true, SSEType: KMS, KMSMasterKeyId: !GetAtt DataKey.Arn }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
       AttributeDefinitions: [{ AttributeName: user_id, AttributeType: S }]
       KeySchema: [{ AttributeName: user_id, KeyType: HASH }]
   OrdersTable:
@@ -561,6 +655,8 @@ Resources:
     Properties:
       TableName: neonbyte-orders
       BillingMode: PAY_PER_REQUEST
+      SSESpecification: { SSEEnabled: true, SSEType: KMS, KMSMasterKeyId: !GetAtt DataKey.Arn }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
       AttributeDefinitions:
         - { AttributeName: user_id, AttributeType: S }
         - { AttributeName: order_id, AttributeType: S }
@@ -628,9 +724,14 @@ Resources:
       IndexingPercentage: 10
   LocalAgentsLogGroup:
     Type: AWS::Logs::LogGroup
+    Metadata:
+      guard:
+        SuppressedRules:
+          - CW_LOGGROUP_RETENTION_PERIOD_CHECK  # RetentionInDays is set from the LogRetentionDays parameter
     Properties:
       LogGroupName: /neonbyte/local/agents
       RetentionInDays: !Ref LogRetentionDays
+      KmsKeyId: !GetAtt DataKey.Arn
   # =====================================================================================
   # EKS Auto Mode cluster + CloudWatch Observability add-on (Application Signals,
   # Container Insights, Fluent Bit logs) — the reference's EKS observability setup
@@ -650,6 +751,17 @@ Resources:
         - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEKSBlockStoragePolicy
         - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEKSLoadBalancingPolicy
         - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEKSNetworkingPolicy
+  EksSecretsKeyPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Lets the EKS control plane envelope-encrypt Kubernetes secrets with DataKey
+      Roles: [!Ref EksClusterRole]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [kms:Encrypt, kms:Decrypt, kms:ListGrants, kms:DescribeKey]
+            Resource: !GetAtt DataKey.Arn
   EksNodeRole:
     Type: AWS::IAM::Role
     Properties:
@@ -661,12 +773,21 @@ Resources:
         - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly
   EksCluster:
     Type: AWS::EKS::Cluster
-    DependsOn: [PrivateDefaultRoute, PrivateSubnet1Routes, PrivateSubnet2Routes]
+    DependsOn: [PrivateDefaultRoute, PrivateSubnet1Routes, PrivateSubnet2Routes, EksSecretsKeyPolicy]
+    Metadata:
+      guard:
+        SuppressedRules:
+          # Public, IAM-authenticated API: event participants run kubectl from CloudShell/laptops and
+          # the CodeBuild deploy step runs outside the VPC. Access is limited to access entries.
+          - EKS_ENDPOINT_NO_PUBLIC_ACCESS
     Properties:
       Name: neonbyte-eks
       Version: !Ref KubernetesVersion
       RoleArn: !GetAtt EksClusterRole.Arn
       BootstrapSelfManagedAddons: false
+      EncryptionConfig:
+        - Resources: [secrets]
+          Provider: { KeyArn: !GetAtt DataKey.Arn }
       AccessConfig:
         AuthenticationMode: API
         BootstrapClusterCreatorAdminPermissions: true  # whoever creates the stack can kubectl
@@ -689,9 +810,14 @@ Resources:
   # Container logs land here via the add-on's Fluent Bit; pre-created for retention + metric filters.
   ContainerInsightsAppLogGroup:
     Type: AWS::Logs::LogGroup
+    Metadata:
+      guard:
+        SuppressedRules:
+          - CW_LOGGROUP_RETENTION_PERIOD_CHECK  # RetentionInDays is set from the LogRetentionDays parameter
     Properties:
       LogGroupName: /aws/containerinsights/neonbyte-eks/application
       RetentionInDays: !Ref LogRetentionDays
+      KmsKeyId: !GetAtt DataKey.Arn
   CloudWatchAddonRole:
     Type: AWS::IAM::Role
     Properties:
@@ -734,20 +860,27 @@ Resources:
             Principal: { Service: pods.eks.amazonaws.com }
             Action: [sts:AssumeRole, sts:TagSession]
             Condition: { StringEquals: { aws:SourceAccount: !Ref "AWS::AccountId" } }
-      Policies:
-        - PolicyName: neonbyte-app
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:UpdateItem, dynamodb:Query, dynamodb:Scan]
-                Resource: [!GetAtt ProductsTable.Arn, !GetAtt CartsTable.Arn, !GetAtt OrdersTable.Arn]
-              - Effect: Allow
-                Action: [ssm:GetParameter, ssm:GetParameters]
-                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/neonbyte/*
-              - Effect: Allow
-                Action: bedrock-agentcore:InvokeAgentRuntime
-                Resource: !Sub arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/NeonByteOrchestrator*
+  PodPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: NeonByte neonbyte-app permissions for PodRole
+      Roles: [!Ref PodRole]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:UpdateItem, dynamodb:Query, dynamodb:Scan]
+            Resource: [!GetAtt ProductsTable.Arn, !GetAtt CartsTable.Arn, !GetAtt OrdersTable.Arn]
+          - Effect: Allow  # tables are encrypted with DataKey; usable only through DynamoDB
+            Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey*, kms:ReEncrypt*, kms:DescribeKey]
+            Resource: !GetAtt DataKey.Arn
+            Condition: { StringEquals: { kms:ViaService: !Sub "dynamodb.${AWS::Region}.amazonaws.com" } }
+          - Effect: Allow
+            Action: [ssm:GetParameter, ssm:GetParameters]
+            Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/neonbyte/*
+          - Effect: Allow
+            Action: bedrock-agentcore:InvokeAgentRuntime
+            Resource: !Sub arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/NeonByteOrchestrator*
   PodIdentity:
     Type: AWS::EKS::PodIdentityAssociation
     Properties:
@@ -770,7 +903,7 @@ Resources:
   # first so the controller-owned ALBs are gone before the VPC is torn down.
   K8sApp:
     Type: Custom::K8sApply
-    DependsOn: [CloudWatchAddon, PodIdentity, BuildAccessEntry, ClusterIngressFromPublicAlb, ClusterIngressFromInternalAlb, PublicSubnet1Routes, PublicSubnet2Routes]
+    DependsOn: [CloudWatchAddon, PodIdentity, PodPolicy, BuildAccessEntry, ClusterIngressFromPublicAlb, ClusterIngressFromInternalAlb, PublicSubnet1Routes, PublicSubnet2Routes]
     Properties:
       ServiceToken: !GetAtt HelperFunction.Arn
       ServiceTimeout: 3600
@@ -795,6 +928,15 @@ Resources:
   # =====================================================================================
   Distribution:
     Type: AWS::CloudFront::Distribution
+    Metadata:
+      guard:
+        SuppressedRules:
+          # Event accounts have no custom domain/ACM certificate; the default *.cloudfront.net certificate
+          # still serves HTTPS (viewers are redirected to HTTPS).
+          - CLOUDFRONT_CUSTOM_SSL_CERTIFICATE
+          # Standard logging needs an ACL-enabled S3 bucket that must be emptied before stack deletion,
+          # which breaks event-account cleanup. Requests are observable via ALB/Application Signals.
+          - CLOUDFRONT_ACCESSLOGS_ENABLED
     Properties:
       DistributionConfig:
         Enabled: true
@@ -868,16 +1010,20 @@ Resources:
             Principal: { Service: bedrock-agentcore.amazonaws.com }
             Action: sts:AssumeRole
             Condition: { StringEquals: { aws:SourceAccount: !Ref "AWS::AccountId" } }
-      Policies:
-        - PolicyName: memory-extraction
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
-                Resource: [!Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*", !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"]
+  MemoryPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: NeonByte memory-extraction permissions for MemoryRole
+      Roles: [!Ref MemoryRole]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+            Resource: [!Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*", !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"]
   Memory:
     Type: AWS::BedrockAgentCore::Memory
+    DependsOn: MemoryPolicy
     Properties:
       Name: NeonByteMemory
       Description: Short + long term memory for the NeonByte assistant (actorId + sessionId scoped)
@@ -903,73 +1049,75 @@ Resources:
             Condition:
               StringEquals: { aws:SourceAccount: !Ref "AWS::AccountId" }
               ArnLike: { aws:SourceArn: !Sub "arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*" }
-      Policies:
-        - PolicyName: neonbyte-agent
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: [ssm:GetParameter, ssm:GetParameters, ssm:GetParametersByPath]
-                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/neonbyte/*
-              - Effect: Allow
-                Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream, bedrock:CountTokens, bedrock:ApplyGuardrail]
-                Resource:
-                  - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
-                  - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:*
-              - Effect: Allow  # gpt-oss / Llama / Claude first use subscribes via Marketplace
-                Action: [aws-marketplace:ViewSubscriptions, aws-marketplace:Subscribe]
-                Resource: "*"
-              - Effect: Allow
-                Action: bedrock-agentcore:InvokeAgentRuntime
-                Resource: !Sub arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/NeonByte*
-              - Effect: Allow  # Gateway inbound auth is AWS_IAM, so without InvokeGateway delegation is a 403.
-                Action: bedrock-agentcore:InvokeGateway
-                Resource: !Sub arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:gateway/*
-              - Effect: Allow
-                Action:
-                  - bedrock-agentcore:CreateEvent
-                  - bedrock-agentcore:ListEvents
-                  - bedrock-agentcore:GetEvent
-                  - bedrock-agentcore:RetrieveMemoryRecords
-                  - bedrock-agentcore:ListMemoryRecords
-                  - bedrock-agentcore:GetMemoryRecord
-                Resource: !GetAtt Memory.MemoryArn
-              - Effect: Allow
-                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
-                Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/neonbyte/*
-              - Effect: Allow
-                Action: ecr:GetAuthorizationToken
-                Resource: "*"
-              - Effect: Allow
-                Action: [logs:CreateLogGroup, logs:DescribeLogStreams, logs:CreateLogStream, logs:PutLogEvents]
-                Resource:
-                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*
-                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*
-              - Effect: Allow
-                Action: logs:DescribeLogGroups
-                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:*
-              - Effect: Allow  # ADOT -> X-Ray OTLP endpoint (Transaction Search / GenAI observability)
-                Action: [xray:PutTraceSegments, xray:PutTelemetryRecords, xray:GetSamplingRules, xray:GetSamplingTargets]
-                Resource: "*"
-              - Effect: Allow
-                Action: cloudwatch:PutMetricData
-                Resource: "*"
-                Condition: { StringEquals: { cloudwatch:namespace: bedrock-agentcore } }
-              - Effect: Allow
-                Action:
-                  - bedrock-agentcore:GetWorkloadAccessToken
-                  - bedrock-agentcore:GetWorkloadAccessTokenForJWT
-                  - bedrock-agentcore:GetWorkloadAccessTokenForUserId
-                Resource:
-                  - !Sub arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:workload-identity-directory/default
-                  - !Sub arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:workload-identity-directory/default/workload-identity/*
-
+  AgentPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: NeonByte neonbyte-agent permissions for AgentRole
+      Roles: [!Ref AgentRole]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [ssm:GetParameter, ssm:GetParameters, ssm:GetParametersByPath]
+            Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/neonbyte/*
+          - Effect: Allow
+            Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream, bedrock:CountTokens, bedrock:ApplyGuardrail]
+            Resource:
+              - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
+              - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:*
+          - Effect: Allow  # gpt-oss / Llama / Claude first use subscribes via Marketplace
+            Action: [aws-marketplace:ViewSubscriptions, aws-marketplace:Subscribe]
+            Resource: "*"
+          - Effect: Allow
+            Action: bedrock-agentcore:InvokeAgentRuntime
+            Resource: !Sub arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/NeonByte*
+          - Effect: Allow  # Gateway inbound auth is AWS_IAM, so without InvokeGateway delegation is a 403.
+            Action: bedrock-agentcore:InvokeGateway
+            Resource: !Sub arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:gateway/*
+          - Effect: Allow
+            Action:
+              - bedrock-agentcore:CreateEvent
+              - bedrock-agentcore:ListEvents
+              - bedrock-agentcore:GetEvent
+              - bedrock-agentcore:RetrieveMemoryRecords
+              - bedrock-agentcore:ListMemoryRecords
+              - bedrock-agentcore:GetMemoryRecord
+            Resource: !GetAtt Memory.MemoryArn
+          - Effect: Allow
+            Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
+            Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/neonbyte/*
+          - Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: "*"
+          - Effect: Allow
+            Action: [logs:CreateLogGroup, logs:DescribeLogStreams, logs:CreateLogStream, logs:PutLogEvents]
+            Resource:
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*
+          - Effect: Allow
+            Action: logs:DescribeLogGroups
+            Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:*
+          - Effect: Allow  # ADOT -> X-Ray OTLP endpoint (Transaction Search / GenAI observability)
+            Action: [xray:PutTraceSegments, xray:PutTelemetryRecords, xray:GetSamplingRules, xray:GetSamplingTargets]
+            Resource: "*"
+          - Effect: Allow
+            Action: cloudwatch:PutMetricData
+            Resource: "*"
+            Condition: { StringEquals: { cloudwatch:namespace: bedrock-agentcore } }
+          - Effect: Allow
+            Action:
+              - bedrock-agentcore:GetWorkloadAccessToken
+              - bedrock-agentcore:GetWorkloadAccessTokenForJWT
+              - bedrock-agentcore:GetWorkloadAccessTokenForUserId
+            Resource:
+              - !Sub arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:workload-identity-directory/default
+              - !Sub arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:workload-identity-directory/default/workload-identity/*
   Fn::ForEach::AgentRuntimes:
     - Agent
     - [Orchestrator, Advisor, OrderDesk, Support, Concierge]
     - "${Agent}Runtime":
         Type: AWS::BedrockAgentCore::Runtime
-        DependsOn: [ContainerImages, PrivateDefaultRoute]
+        DependsOn: [ContainerImages, PrivateDefaultRoute, AgentPolicy]
         Properties:
           AgentRuntimeName: !Sub NeonByte${Agent}
           Description: !Sub NeonByte ${Agent} agent
@@ -1052,17 +1200,21 @@ Resources:
             Principal: { Service: bedrock-agentcore.amazonaws.com }
             Action: sts:AssumeRole
             Condition: { StringEquals: { aws:SourceAccount: !Ref "AWS::AccountId" } }
-      Policies:
-        - PolicyName: invoke-sub-agents
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: bedrock-agentcore:InvokeAgentRuntime
-                Resource: !Sub arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/NeonByte*
+  GatewayPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: NeonByte invoke-sub-agents permissions for GatewayRole
+      Roles: [!Ref GatewayRole]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: bedrock-agentcore:InvokeAgentRuntime
+            Resource: !Sub arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/NeonByte*
   # Agent-to-agent routing: the orchestrator POSTs {gatewayUrl}/<target>/invocations (SigV4).
   Gateway:
     Type: AWS::BedrockAgentCore::Gateway
+    DependsOn: GatewayPolicy
     Properties:
       Name: NeonByteGateway
       Description: Agent-to-agent routing for the NeonByte multi-agent assistant
@@ -1114,6 +1266,34 @@ Resources:
       FilterPattern: '"order placed"'
       MetricTransformations:
         - { MetricNamespace: NeonByte, MetricName: OrdersPlaced, MetricValue: "1", DefaultValue: 0 }
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: neonbyte-alarms
+      KmsMasterKeyId: !Ref DataKey
+  AlarmTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref AlarmTopic]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CloudWatchAlarms
+            Effect: Allow
+            Principal: { Service: cloudwatch.amazonaws.com }
+            Action: sns:Publish
+            Resource: !Ref AlarmTopic
+            Condition: { StringEquals: { aws:SourceAccount: !Ref "AWS::AccountId" } }
+          - Sid: TLSOnly
+            Effect: Deny
+            Principal: "*"
+            Action: sns:Publish
+            Resource: !Ref AlarmTopic
+            Condition: { Bool: { aws:SecureTransport: "false" } }
+  AlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlarmEmail
+    Properties: { TopicArn: !Ref AlarmTopic, Protocol: email, Endpoint: !Ref AlarmEmail }
   Storefront5xxAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -1129,6 +1309,8 @@ Resources:
       Threshold: 10
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
   DeclinedPaymentsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -1142,6 +1324,8 @@ Resources:
       Threshold: 10
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
   Dashboard:
     Type: AWS::CloudWatch::Dashboard
     Properties:
@@ -1199,6 +1383,8 @@ Outputs:
     Value: !Ref EksCluster
   KubectlConfigCommand:
     Value: !Sub aws eks update-kubeconfig --name ${EksCluster} --region ${AWS::Region}
+  AlarmTopicArn:
+    Value: !Ref AlarmTopic
   ImageBuildProject:
     Description: CodeBuild project that builds the images (see its logs if the stack waits on ContainerImages)
     Value: !Ref ImageBuildProject

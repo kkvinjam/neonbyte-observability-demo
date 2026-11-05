@@ -1,16 +1,24 @@
 # One-time setup on Windows (PowerShell 5.1+). Installs everything needed to run the NeonByte agents.
 #   powershell -ExecutionPolicy Bypass -File local\setup.ps1
-# 1. installs uv (https://docs.astral.sh/uv/) if missing  2. downloads a private Python 3.13
+# 1. uses uv (installs it with pip if missing)            2. uv downloads a private Python 3.13
 # 3. creates .venv and installs local\requirements.txt    4. checks for AWS credentials
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    Write-Host "==> Installing uv (official installer from astral.sh)"
-    $env:UV_NO_MODIFY_PATH = "1"
-    Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
-    $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
+    # Installed as a Python package from your configured index, never by running a downloaded script.
+    $py = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $py) { $py = Get-Command py -ErrorAction SilentlyContinue }  # PowerShell 5.1 has no ?? operator
+    if ($py) {
+        Write-Host "==> Installing uv with pip into local\.bootstrap"
+        & $py.Source -m venv local\.bootstrap
+        & "$Root\local\.bootstrap\Scripts\python.exe" -m pip install --quiet uv
+        $env:Path = "$Root\local\.bootstrap\Scripts;$env:Path"
+    }
+}
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    throw "uv is required: 'winget install astral-sh.uv' or 'pip install uv' (https://docs.astral.sh/uv/getting-started/installation/), then re-run."
 }
 Write-Host "==> $(uv --version)"
 Write-Host "==> Python 3.13 + virtualenv (.venv)"

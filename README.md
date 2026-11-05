@@ -219,6 +219,7 @@ Key parameters (`--param Key=Value` with `deploy.sh`):
 | `AvailabilityZoneId1/2` | per-region map | AZ **IDs** supported by AgentCore VPC mode (e.g. `use1-az1`, `use1-az2`) |
 | `EnableTransactionSearch` / `EnableApplicationSignalsDiscovery` | true | set **false** if already enabled in the account/region |
 | `EnableGuardrail` | true | Bedrock Guardrail on the Claude-backed agents |
+| `AlarmEmail` | (empty) | optional e-mail subscribed to the `neonbyte-alarms` SNS topic |
 | `ServiceDesiredCount` | 1 | pod replicas per microservice |
 | `KubernetesVersion` | 1.36 | EKS version |
 
@@ -248,6 +249,10 @@ includes the Marketplace subscribe permissions that some first invocations need.
   `runtime/NeonByteOrchestrator*`.
 * Locally, every process binds to `127.0.0.1`. Docker compose publishes only the storefront and the Jaeger UI,
   and only on loopback.
+* Data at rest uses a customer-managed KMS key (`alias/neonbyte-data`, rotation on): DynamoDB tables,
+  log groups, CodeBuild, EKS secrets, and the SNS/SQS queues. IAM permissions are managed policies.
+* Security-scanner (cfn-guard) rules that conflict with running in event accounts are suppressed per resource,
+  with the reason next to each one (`Metadata.guard.SuppressedRules` in the template).
 * This is a demo: there is no real login (pick a shopper from the header), payments are simulated, and one IAM role
   is shared by the five services (one Pod Identity service account).
 

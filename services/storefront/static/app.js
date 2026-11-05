@@ -72,12 +72,27 @@ document.getElementById('chat-new').onclick = () => {
 document.getElementById('chat-toggle').onclick = () => { chat.hidden = !chat.hidden; document.getElementById('chat-input').focus(); };
 document.getElementById('chat-close').onclick = () => { chat.hidden = true; };
 
-// Render the agent's light markdown safely: escape first, then bold + product links.
-const render = (text) => {
-  const esc = text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  return esc.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\b(NB-\d{4})\b/g, '<a href="/product/$1">$1</a>');
+// Render the agent's light markdown as DOM nodes (no HTML parsing): text nodes, **bold**, and
+// product ids (NB-0009) as links. Agent output is model-generated, so treat it as untrusted.
+const TOKEN = /\*\*(.+?)\*\*|\b(NB-\d{4})\b/g;
+const render = (el, text) => {
+  el.replaceChildren();
+  let last = 0;
+  for (const m of text.matchAll(TOKEN)) {
+    if (m.index > last) el.append(text.slice(last, m.index));
+    if (m[1] !== undefined) {
+      const b = document.createElement('strong'); render(b, m[1]); el.append(b);  // bold may contain ids
+    } else {
+      const a = document.createElement('a'); a.href = `/product/${m[2]}`; a.textContent = m[2]; el.append(a);
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) el.append(text.slice(last));
 };
-const addMsg = (cls, html) => { const m = document.createElement('div'); m.className = `msg ${cls}`; m.innerHTML = html; log.appendChild(m); log.scrollTop = log.scrollHeight; return m; };
+const addMsg = (cls, text) => {
+  const m = document.createElement('div'); m.className = `msg ${cls}`; render(m, text);
+  log.appendChild(m); log.scrollTop = log.scrollHeight; return m;
+};
 
 document.getElementById('chat-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -85,11 +100,11 @@ document.getElementById('chat-form').addEventListener('submit', async (e) => {
   const message = input.value.trim();
   if (!message) return;
   input.value = '';
-  addMsg('me', render(message));
+  addMsg('me', message);
   const pending = addMsg('bot typing', 'Sparky is thinking…');
   try {
     const res = await api('POST', '/api/assistant/chat', { message, session });
-    pending.className = 'msg bot'; pending.innerHTML = render(res.reply || '(no reply)');
+    pending.className = 'msg bot'; render(pending, res.reply || '(no reply)');
     if (res.session_id) showSession(res.session_id);
     const cart = await api('GET', '/api/cart'); setCount(cart.item_count);
   } catch (err) { pending.className = 'msg bot'; pending.textContent = `⚠️ ${err.message}`; }

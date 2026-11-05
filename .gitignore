@@ -16,3 +16,5 @@ aws.env
 .agents/
 .env.omni
 .omni/collector.json
+local/.bootstrap/
+scan-report.json

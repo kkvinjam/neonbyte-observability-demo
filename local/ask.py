@@ -13,14 +13,17 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import urllib.parse
 import urllib.request
 import uuid
 
 
 def ask(url: str, prompt: str, user: str, session: str) -> None:
+    if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
+        raise SystemExit(f"--url must be an http(s) URL, got {url!r}")
     body = json.dumps({"prompt": prompt, "userId": user, "sessionId": session}).encode()
     req = urllib.request.Request(f"{url.rstrip('/')}/invocations", data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=300) as resp:
+    with urllib.request.urlopen(req, timeout=300) as resp:  # nosec B310 - scheme restricted to http(s) above
         if "text/event-stream" in resp.headers.get("Content-Type", ""):
             for raw in resp:
                 line = raw.decode().strip()

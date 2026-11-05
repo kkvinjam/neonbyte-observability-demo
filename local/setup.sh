@@ -1,11 +1,11 @@
 #!/usr/bin/env sh
 # One-time setup on macOS, Linux or Windows (WSL / Git Bash): installs everything needed to run the
-# NeonByte agents locally. Only prerequisite: a POSIX shell with curl.
+# NeonByte agents locally. Prerequisites: a POSIX shell and either uv or any Python 3 with pip.
 #
 #   local/setup.sh
 #
 # What it does:
-#   1. installs uv (https://docs.astral.sh/uv/) into ~/.local/bin if it is not already on PATH
+#   1. uses uv (https://docs.astral.sh/uv/); if missing, installs it with pip from your package index
 #   2. uses uv to download a private Python 3.13 (no system Python needed, nothing global changed)
 #   3. creates .venv in the repo and installs local/requirements.txt (agents + embedded services)
 #   4. checks for AWS credentials (needed for Amazon Bedrock) and tells you what's missing
@@ -13,14 +13,21 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+if ! command -v uv >/dev/null 2>&1 && [ -x "$HOME/.local/bin/uv" ]; then PATH="$HOME/.local/bin:$PATH"; fi
 if ! command -v uv >/dev/null 2>&1; then
-  if [ -x "$HOME/.local/bin/uv" ]; then
-    PATH="$HOME/.local/bin:$PATH"
-  else
-    echo "==> Installing uv (official installer from astral.sh) into ~/.local/bin"
-    curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh
-    PATH="$HOME/.local/bin:$PATH"
+  # Installed as a Python package from your configured package index (pip.conf / PIP_INDEX_URL) into a
+  # repo-local bootstrap venv — never by piping a remote script into a shell, and nothing global changes.
+  PY="$(command -v python3 || command -v python || true)"
+  if [ -n "$PY" ]; then
+    echo "==> Installing uv with pip into local/.bootstrap"
+    "$PY" -m venv local/.bootstrap && local/.bootstrap/bin/python -m pip install --quiet uv
+    PATH="$ROOT/local/.bootstrap/bin:$PATH"
   fi
+fi
+if ! command -v uv >/dev/null 2>&1; then
+  echo "uv is required: install it with 'brew install uv', 'pipx install uv', 'pip install uv' or 'winget install astral-sh.uv'," >&2
+  echo "see https://docs.astral.sh/uv/getting-started/installation/ , then re-run local/setup.sh" >&2
+  exit 1
 fi
 echo "==> uv $(uv --version | cut -d' ' -f2)"
 
