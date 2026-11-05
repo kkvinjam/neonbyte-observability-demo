@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block title %}{{ product.name }} · NeonByte{% endblock %}
 {% block content %}
-<a href="/?category={{ product.category }}" class="muted">← {{ product.category|replace('-', ' ')|title }}</a>
+<a href="/?category={{ product.category }}" class="muted">← {{ labels.get(product.category, product.category|replace('-', ' ')|title) }}</a>
 <section class="detail">
-  <div class="thumb big">{{ icons.get(product.category, '🔋') }}</div>
+  <div class="thumb big" data-cat="{{ product.category }}">{{ icons.get(product.category, '🔋') }}</div>
   <div>
     <div class="brand">{{ product.brand }}</div>
     <h1>{{ product.name }}</h1>

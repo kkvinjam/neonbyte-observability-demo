@@ -31,7 +31,8 @@ CATEGORY_ICONS = {
     "laptops": "💻", "smartphones": "📱", "audio": "🎧", "tvs": "📺", "wearables": "⌚",
     "cameras": "📷", "gaming": "🎮", "accessories": "🔌", "smart-home": "🏠", "tablets": "📲",
 }
-templates.env.globals.update(icons=CATEGORY_ICONS, users=DEMO_USERS)
+CATEGORY_LABELS = {"tvs": "TVs", "smart-home": "Smart Home"}  # display names where title-case reads wrong
+templates.env.globals.update(icons=CATEGORY_ICONS, labels=CATEGORY_LABELS, users=DEMO_USERS)
 templates.env.filters["money"] = lambda cents: f"${cents / 100:,.2f}"
 
 
