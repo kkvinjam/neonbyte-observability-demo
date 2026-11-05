@@ -75,5 +75,13 @@ aws cloudformation deploy \
   --no-fail-on-empty-changeset ${EXTRA[@]+"${EXTRA[@]}"} \
   --parameter-overrides "SourceS3Uri=s3://$BUCKET/$SRC_KEY" "ImageTag=$TAG" ${PARAMS[@]+"${PARAMS[@]}"}
 
+# /static/* is cached at CloudFront for up to a day; flush it so CSS/JS changes show up immediately.
+DIST_ID="$(aws cloudformation describe-stack-resource --stack-name "$STACK_NAME" --region "$REGION" \
+  --logical-resource-id Distribution --query StackResourceDetail.PhysicalResourceId --output text 2>/dev/null || true)"
+if [[ -n "$DIST_ID" && "$DIST_ID" != "None" ]]; then
+  aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths '/static/*' --query Invalidation.Id --output text >/dev/null \
+    && echo "Requested CloudFront invalidation of /static/* on $DIST_ID"
+fi
+
 aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" \
   --query "Stacks[0].Outputs[].[OutputKey,OutputValue]" --output table
