@@ -82,7 +82,8 @@ agents/
   neonbyte_agents/         one package per agent: agent.py + server.py (AgentCore entrypoint)
     common/                config, models (single source of truth), memory, store client, AgentCore server
     knowledge/             buying guides, policies, troubleshooting (keyword retrieval)
-  deploy/                  Dockerfile (AGENT build-arg, ARM64) + pinned-per-agent requirements
+  deploy/                  Dockerfile (AGENT build-arg, ARM64), requirements.<agent>.txt (inputs) and
+                           requirements.<agent>.lock (hash-pinned, what images install; `make lock`)
 traffic/loadgen.py         traffic generator (local CLI and EKS deployment)
 deploy/cloudformation/     neonbyte.yaml — the whole application in one template
 deploy/k8s/render.py       renders the Kubernetes manifests (Deployments, Services, Ingresses, NodePool)

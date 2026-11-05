@@ -27,10 +27,13 @@ compose-up:  ## run everything in containers with Jaeger tracing
 load:  ## generate traffic against TARGET (default local storefront)
 	$(VENV)/bin/python traffic/loadgen.py --target $${TARGET:-http://127.0.0.1:8080}
 
+lock:  ## re-pin agent image dependencies (LOCK_DATE=... to move forward)
+	deploy/scripts/lock-agents.sh
+
 deploy:  ## deploy/update the full stack to AWS (current credentials/region)
 	deploy/scripts/deploy.sh
 
 destroy:  ## delete the AWS stack
 	deploy/scripts/destroy.sh
 
-.PHONY: help venv test lint-cfn run-local run-local-noagents compose-up load deploy destroy
+.PHONY: help venv test lock lint-cfn run-local run-local-noagents compose-up load deploy destroy

@@ -11,8 +11,9 @@ ENV UV_SYSTEM_PYTHON=1 UV_COMPILE_BYTECODE=1 PYTHONUNBUFFERED=1 \
     AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT=true DOCKER_CONTAINER=1 \
     AGENT=${AGENT}
 
-COPY deploy/requirements.${AGENT}.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir uv && uv pip install -r /tmp/requirements.txt
+# Pinned + hash-checked lock (deploy/scripts/lock-agents.sh); never resolve fresh at build time.
+COPY deploy/requirements.${AGENT}.lock /tmp/requirements.lock
+RUN pip install --no-cache-dir uv && uv pip install --require-hashes --no-deps -r /tmp/requirements.lock
 
 RUN useradd -m -u 1000 bedrock_agentcore
 COPY --chown=bedrock_agentcore:bedrock_agentcore neonbyte_agents /app/neonbyte_agents/

@@ -9,6 +9,7 @@ ENV PYTHONUNBUFFERED=1 UV_SYSTEM_PYTHON=1 DOCKER_CONTAINER=1 \
     AWS_REGION=us-east-1 NEONBYTE_SERVICES_DIR=/app/services
 WORKDIR /app
 COPY agents/requirements.txt agents/requirements.txt
+COPY agents/constraints.txt agents/constraints.txt
 COPY local/requirements.txt local/requirements.txt
 RUN pip install --no-cache-dir uv && uv pip install --no-cache -r local/requirements.txt
 COPY services services
